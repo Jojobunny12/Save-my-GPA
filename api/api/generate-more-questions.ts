@@ -25,7 +25,10 @@ export default async function handler(req: any, res: any) {
     const key = process.env.GEMINI_API_KEY;
     if (!key) throw new Error("NO_API_KEY");
 
-    const ai = new GoogleGenAI({ apiKey: key });
+const ai = new GoogleGenAI({
+  apiKey: key,
+  httpOptions: { apiVersion: "v1beta" },
+});
 
     const systemPrompt = `You are an expert Academic Coach specializing in rigorous high school and AP curriculums.
 Generate 25 brand-new multiple choice questions for "${activeCourseName}" (${courseCode}, Department: ${department || "General"}).
