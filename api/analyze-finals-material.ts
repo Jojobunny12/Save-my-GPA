@@ -10,13 +10,14 @@ function parseGeminiJson(rawText: string) {
 
 export async function POST(request: Request) {
   try {
-    const key = process.env.GEMINI_API_KEY;
-    if (!key) {
+    const rawKey = process.env.GEMINI_API_KEY;
+    if (!rawKey) {
       return Response.json(
         { error: "GEMINI_API_KEY is missing in Vercel Environment Variables." },
         { status: 500 }
       );
     }
+    const key = rawKey.trim();
 
     const body = await request.json();
     const {
@@ -65,97 +66,108 @@ ${pastedText ? `Reference notes:\n"""\n${pastedText}\n"""` : ""}`;
     }
     parts.push({ text: promptMessage });
 
-    const geminiRes = await fetch(
-      `https://googleapis.com{encodeURIComponent(key)}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [{ text: systemPrompt }],
-          },
-          contents: [{ role: "user", parts }],
-          generationConfig: {
-            responseMimeType: "application/json",
-            responseSchema: {
+    const requestBody = JSON.stringify({
+      systemInstruction: {
+        parts: [{ text: systemPrompt }],
+      },
+      contents: [{ role: "user", parts }],
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "OBJECT",
+          required: ["summary", "timeline", "flashcards", "quiz"],
+          properties: {
+            summary: {
               type: "OBJECT",
-              required: ["summary", "timeline", "flashcards", "quiz"],
+              required: [
+                "title",
+                "curriculumExplanation",
+                "topTipsForFinal",
+                "synthesizedNotesParagraph",
+                "coreCheatSheetMarkdown",
+              ],
               properties: {
-                summary: {
-                  type: "OBJECT",
-                  required: [
-                    "title",
-                    "curriculumExplanation",
-                    "topTipsForFinal",
-                    "synthesizedNotesParagraph",
-                    "coreCheatSheetMarkdown",
-                  ],
-                  properties: {
-                    title: { type: "STRING" },
-                    curriculumExplanation: { type: "STRING" },
-                    topTipsForFinal: { type: "ARRAY", items: { type: "STRING" } },
-                    synthesizedNotesParagraph: { type: "STRING" },
-                    coreCheatSheetMarkdown: { type: "STRING" },
-                  },
+                title: { type: "STRING" },
+                curriculumExplanation: { type: "STRING" },
+                topTipsForFinal: { type: "ARRAY", items: { type: "STRING" } },
+                synthesizedNotesParagraph: { type: "STRING" },
+                coreCheatSheetMarkdown: { type: "STRING" },
+              },
+            },
+            timeline: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                required: ["dayName", "activityTitle", "activityDescription"],
+                properties: {
+                  dayName: { type: "STRING" },
+                  activityTitle: { type: "STRING" },
+                  activityDescription: { type: "STRING" },
                 },
-                timeline: {
-                  type: "ARRAY",
-                  items: {
-                    type: "OBJECT",
-                    required: ["dayName", "activityTitle", "activityDescription"],
-                    properties: {
-                      dayName: { type: "STRING" },
-                      activityTitle: { type: "STRING" },
-                      activityDescription: { type: "STRING" },
-                    },
-                  },
+              },
+            },
+            flashcards: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                required: ["question", "answer"],
+                properties: {
+                  question: { type: "STRING" },
+                  answer: { type: "STRING" },
                 },
-                flashcards: {
-                  type: "ARRAY",
-                  items: {
-                    type: "OBJECT",
-                    required: ["question", "answer"],
-                    properties: {
-                      question: { type: "STRING" },
-                      answer: { type: "STRING" },
-                    },
-                  },
-                },
-                quiz: {
-                  type: "ARRAY",
-                  items: {
-                    type: "OBJECT",
-                    required: ["question", "options", "correctIndex", "explanation"],
-                    properties: {
-                      question: { type: "STRING" },
-                      options: { type: "ARRAY", items: { type: "STRING" } },
-                      correctIndex: { type: "INTEGER" },
-                      explanation: { type: "STRING" },
-                    },
-                  },
+              },
+            },
+            quiz: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                required: ["question", "options", "correctIndex", "explanation"],
+                properties: {
+                  question: { type: "STRING" },
+                  options: { type: "ARRAY", items: { type: "STRING" } },
+                  correctIndex: { type: "INTEGER" },
+                  explanation: { type: "STRING" },
                 },
               },
             },
           },
-        }),
+        },
+      },
+    });
+
+    const models = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+    let lastError: any = null;
+
+    for (const model of models) {
+      try {
+        const geminiRes = await fetch(
+          `https://googleapis.com{model}:generateContent?key=${encodeURIComponent(key)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: requestBody,
+          }
+        );
+
+        const data = await geminiRes.json();
+        if (!geminiRes.ok) {
+          lastError = data;
+          continue;
+        }
+
+        const replyText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (replyText) {
+          return Response.json(parseGeminiJson(replyText));
+        }
+      } catch (e: any) {
+        lastError = { error: e?.cause?.message || e?.message || "Network error" };
       }
-    );
-
-    const data = await geminiRes.json();
-    if (!geminiRes.ok) {
-      return Response.json(data, { status: geminiRes.status });
     }
 
-    const replyText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!replyText) {
-      throw new Error("Empty response from Gemini API.");
-    }
-
-    return Response.json(parseGeminiJson(replyText));
+    return Response.json(lastError || { error: "Failed to reach Gemini API." }, { status: 500 });
   } catch (error: any) {
-    console.error("API Error:", error);
     return Response.json(
-      { error: error?.message || "Server error" },
+      { error: error?.cause?.message || error?.message || "Server error" },
       { status: 500 }
     );
   }
