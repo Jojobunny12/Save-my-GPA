@@ -10,13 +10,14 @@ function parseGeminiJson(rawText: string) {
 
 export async function POST(request: Request) {
   try {
-    const key = process.env.GEMINI_API_KEY;
-    if (!key) {
+    const rawKey = process.env.GEMINI_API_KEY;
+    if (!rawKey) {
       return Response.json(
         { error: "GEMINI_API_KEY is missing in Vercel Environment Variables." },
         { status: 500 }
       );
     }
+    const key = rawKey.trim();
 
     const { courseCode, courseName, department, existingQuestions } = await request.json();
     if (!courseCode) {
@@ -88,6 +89,9 @@ Generate 25 brand-new multiple choice questions for "${activeCourseName}" (${cou
 
     return Response.json(parseGeminiJson(replyText));
   } catch (err: any) {
-    return Response.json({ error: err?.message || "Server error" }, { status: 500 });
+    return Response.json(
+      { error: err?.cause?.message || err?.message || "Server error" },
+      { status: 500 }
+    );
   }
 }
