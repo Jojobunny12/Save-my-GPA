@@ -156,11 +156,7 @@ export async function POST(request: Request) {
     let lastError: any = null;
 
     for (const model of models) {
-      const apiUrl =
-        "https://googleapis.com" +
-        model +
-        ":generateContent?key=" +
-        encodeURIComponent(key);
+     const apiUrl = ["https://googleapis.com", "v1beta", "models", model + ":generateContent?key=" + encodeURIComponent(key)].join("/");
 
       const geminiRes = await fetch(apiUrl, {
         method: "POST",
