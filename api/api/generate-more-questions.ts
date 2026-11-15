@@ -1,7 +1,8 @@
-import { GoogleGenAI, ThinkingLevel, Type } from "@google/genai";
-import { generateFallbackQuiz } from "../src/utils/academicFallback";
+import { GoogleGenAI, Type } from "@google/genai";
 
-function parseGeminiJson(rawText: string): any {
+export const maxDuration = 60;
+
+function parseGeminiJson(rawText: string) {
   let cleaned = rawText.trim();
   if (cleaned.startsWith("```")) {
     cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
@@ -9,51 +10,34 @@ function parseGeminiJson(rawText: string): any {
   return JSON.parse(cleaned);
 }
 
-export default async function handler(req: any, res: any) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
-  const { courseCode, courseName, department, existingQuestions } = req.body || {};
-  if (!courseCode) {
-    return res.status(400).json({ error: "courseCode is required." });
-  }
-
-  const activeCourseName = courseName || `Course ${courseCode}`;
-
+export async function POST(request: Request) {
   try {
     const key = process.env.GEMINI_API_KEY;
-    if (!key) throw new Error("NO_API_KEY");
+    if (!key) {
+      return Response.json(
+        { error: "GEMINI_API_KEY is missing in Vercel Environment Variables." },
+        { status: 500 }
+      );
+    }
 
-const ai = new GoogleGenAI({
-  apiKey: key,
-  httpOptions: { apiVersion: "v1beta" },
-});
+    const { courseCode, courseName, department, existingQuestions } = await request.json();
+    if (!courseCode) {
+      return Response.json({ error: "courseCode is required." }, { status: 400 });
+    }
 
-    const systemPrompt = `You are an expert Academic Coach specializing in rigorous high school and AP curriculums.
-Generate 25 brand-new multiple choice questions for "${activeCourseName}" (${courseCode}, Department: ${department || "General"}).
+    const activeCourseName = courseName || `Course ${courseCode}`;
+    const ai = new GoogleGenAI({ apiKey: key });
 
-CRITICAL FORMULA & MATH RENDERING GUIDELINES:
-- DO NOT USE RAW LATEX SYMBOLS OR MATH BLOCKS (such as \\frac{a}{b}, \\sqrt{x}, or $$...$$ / $...$).
-- Write ALL formulas in clean plain unicode text (e.g., "m = (y2 - y1) / (x2 - x1)", "lim (x -> c) f(x) = L").
-
-TONE & QUALITY GUIDELINES:
-- Keep the tone focused, encouraging, clear, and student-friendly—100% textbook accuracy.
-- EVERY single quiz question MUST test real subject content (no filler questions about study habits).
-
-DO NOT duplicate any of the following questions already in the student's study deck:
-${(existingQuestions || []).map((q: any) => `- ${q.question}`).slice(0, 50).join("\n")}
-
-Reply with a valid JSON object matching the schema with no markdown blocks.`;
-
-    const promptMessage = `Generate 25 MORE unique multiple choice questions inside the "quiz" array for my course code: ${courseCode}. Keep all subject details fully accurate with master equations, historical arguments, literary concepts, or code traces, and keep explanations clear and helpful.`;
+    const fullPrompt = `You are an expert Academic Coach specializing in rigorous high school and AP curriculums.
+Generate 25 brand-new multiple choice questions inside the "quiz" array for "${activeCourseName}" (${courseCode}, Department: ${department || "General"}).
+- Write all formulas in clean plain unicode text (no LaTeX $$ or \\frac).
+- Every question MUST test real subject content (no generic study-habit filler).
+- Do not repeat these questions: ${(existingQuestions || []).map((q: any) => q.question).slice(0, 30).join(" | ")}`;
 
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: promptMessage,
+      contents: fullPrompt,
       config: {
-        systemInstruction: systemPrompt,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -77,18 +61,12 @@ Reply with a valid JSON object matching the schema with no markdown blocks.`;
       },
     });
 
-    if (response?.text) {
-      return res.status(200).json(parseGeminiJson(response.text));
+    if (!response?.text) {
+      throw new Error("Empty response from Gemini API.");
     }
-    throw new Error("Empty response from Gemini API.");
+
+    return Response.json(parseGeminiJson(response.text));
   } catch (err: any) {
-    console.warn("Gemini API unavailable for extra questions. Using fallback:", err?.message);
-    const fallbackQuestions = generateFallbackQuiz(
-      activeCourseName,
-      courseCode,
-      department || "General",
-      25
-    );
-    return res.status(200).json({ quiz: fallbackQuestions });
+    return Response.json({ error: err?.message || "Server error" }, { status: 500 });
   }
 }
