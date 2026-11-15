@@ -140,14 +140,17 @@ ${pastedText ? `Reference notes:\n"""\n${pastedText}\n"""` : ""}`;
 
     for (const model of models) {
       try {
-        const geminiRes = await fetch(
-          `https://googleapis.com{model}:generateContent?key=${encodeURIComponent(key)}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: requestBody,
-          }
+        const endpoint = new URL(
+          `/v1beta/models/${model}:generateContent`,
+          "https://googleapis.com"
         );
+        endpoint.searchParams.set("key", key);
+
+        const geminiRes = await fetch(endpoint.toString(), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: requestBody,
+        });
 
         const data = await geminiRes.json();
         if (!geminiRes.ok) {
@@ -155,7 +158,12 @@ ${pastedText ? `Reference notes:\n"""\n${pastedText}\n"""` : ""}`;
           continue;
         }
 
-        const replyText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        const firstCandidate = Array.isArray(data?.candidates) ? data.candidates.at(0) : null;
+        const firstPart = Array.isArray(firstCandidate?.content?.parts)
+          ? firstCandidate.content.parts.at(0)
+          : null;
+        const replyText = firstPart?.text;
+
         if (replyText) {
           return Response.json(parseGeminiJson(replyText));
         }
