@@ -42,7 +42,7 @@ export async function POST(request: Request) {
     const activeSchool = schoolName || "D'Evelyn High School";
     const activeCourseName = courseName || `Course ${courseCode}`;
 
-    const systemPrompt = `You are an expert Academic Coach specializing in rigorous high school and AP curriculums.
+    const fullPrompt = `You are an expert Academic Coach specializing in rigorous high school and AP curriculums.
 Generate a complete, high-yield finals preparation study deck for "${activeSchool}" — Course: "${courseCode}" (${activeCourseName}).
 
 RULES:
@@ -50,9 +50,10 @@ RULES:
 - Keep the tone focused, encouraging, and 100% textbook accurate.
 - EVERY quiz question MUST test real subject content (no generic study-habit filler questions).
 - Metadata: Department: ${department || "Deduce from code"}, Focus: ${curriculumDetails || "Standard"}, Format: ${examFocus || "Cumulative exam"}, Strategy: ${studyStrategy || "Active recall"}.
-- Student Notes: ${additionalNotes || "None"}.`;
+- Student Notes: ${additionalNotes || "None"}.
 
-    const promptMessage = `Create a study companion deck for course code: ${courseCode}. Generate EXACTLY 25 concise, high-value multiple choice questions inside "quiz".
+TASK:
+Create a study companion deck for course code: ${courseCode}. Generate EXACTLY 25 concise, high-value multiple choice questions inside "quiz".
 ${pastedText ? `Reference notes:\n"""\n${pastedText}\n"""` : ""}`;
 
     const contents: any[] = [];
@@ -65,17 +66,13 @@ ${pastedText ? `Reference notes:\n"""\n${pastedText}\n"""` : ""}`;
         },
       });
     }
-    contents.push({ text: promptMessage });
+    contents.push({ text: fullPrompt });
 
-const ai = new GoogleGenAI({
-  apiKey: key,
-  httpOptions: { apiVersion: "v1beta" },
-});
+    const ai = new GoogleGenAI({ apiKey: key });
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents,
       config: {
-        systemInstruction: systemPrompt,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
