@@ -45,13 +45,13 @@ const DEPARTMENTS: DepartmentFilter[] = [
 ];
 
 const LOADING_PHRASES = [
-  "Analyzing D'Evelyn syllabus and selected course units...",
-  "Extracting high-yield formulas, theorems, and key terms...",
-  "Building active recall flashcards across every course unit...",
-  "Crafting cumulative multiple-choice practice questions...",
-  "Organizing your 5-day finals countdown schedule...",
-  "Formatting step-by-step explanations and answer keys...",
-  "Finalizing your personalized study deck..."
+  "Analyzing D'Evelyn syllabus, textbooks, and selected units...",
+  "Predicting high-probability exam formulas, theorems, and traps...",
+  "Generating predictive active recall flashcards across every unit...",
+  "Writing 25 cumulative mock final exam questions...",
+  "Verifying set-unique answer pools and step-by-step explanations...",
+  "Formatting your 5-day D'Evelyn finals prep schedule...",
+  "Finalizing your live AI study deck..."
 ];
 
 export default function MaterialUploader({ onAnalysisComplete }: MaterialUploaderProps) {
@@ -232,9 +232,7 @@ export default function MaterialUploader({ onAnalysisComplete }: MaterialUploade
 
   const calcResult = calculateEstimate();
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
+  const runGeneration = async () => {
     const targetCode = courseCode.trim();
     if (!targetCode) {
       setError("Please select a D'Evelyn course from the catalog or type a Course Code first.");
@@ -270,17 +268,17 @@ export default function MaterialUploader({ onAnalysisComplete }: MaterialUploade
       studyStrategy: finalStrategy,
       units: unitsToCover,
       pastedText: "",
-      additionalNotes: `Student is targeting a grade of ${targetGrade}% and currently holds a ${currentGrade}%. The final exam is worth ${finalWeight}% of the class grade. Focus exam questions and cheat sheets cleanly across these ${unitsToCover.length} units: ${unitsToCover.join(" | ")}. ${
+      additionalNotes: `Student is targeting a grade of ${targetGrade}% and currently holds a ${currentGrade}%. The final exam is worth ${finalWeight}% of the class grade. Predict actual D'Evelyn exam questions and high-trap flashcards across these ${unitsToCover.length} units: ${unitsToCover.join(" | ")}. ${
         attachedFile
           ? `CRITICAL: The student uploaded a custom study sheet PDF called "${attachedFile.name}". Carefully read this file for specific terms, math formulas, equations, facts, or questions, and construct the study deck, timelines, cheat sheets, and flashcards directly around its content. Keep math unicode clean and LaTeX-free.`
-          : "No custom study file uploaded; generate using official D'Evelyn syllabus knowledge across every unit listed above."
+          : "No custom study file uploaded; predict cumulative D'Evelyn final exam content from official syllabus & textbooks across every unit listed above."
       }`,
       fileBase64: attachedFile?.base64 || null,
       fileMimeType: attachedFile?.mimeType || null
     };
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 45_000);
+    const timeoutId = setTimeout(() => controller.abort(), 80_000);
 
     try {
       const response = await fetch("/api/analyze-finals-material", {
@@ -291,8 +289,14 @@ export default function MaterialUploader({ onAnalysisComplete }: MaterialUploade
       });
 
       if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.error || "Failed to generate study deck for this course code.");
+        let errMessage = "Failed to generate live AI study deck for this course.";
+        try {
+          const errData = await response.json();
+          if (errData?.error) errMessage = errData.error;
+        } catch {
+          // ignore non-JSON error body
+        }
+        throw new Error(errMessage);
       }
 
       const deckData = await response.json();
@@ -319,17 +323,22 @@ export default function MaterialUploader({ onAnalysisComplete }: MaterialUploade
     } catch (err: any) {
       console.error(err);
       if (err?.name === "AbortError") {
-        setError("Generation timed out while contacting the server. Please try again.");
+        setError("Live AI generation timed out after 80 seconds. Click Try Again to retry.");
       } else {
         setError(
           err.message ||
-            "An unexpected error occurred while generating your study deck. Please try again."
+            "Live AI generation failed unexpectedly. Please click Try Again."
         );
       }
     } finally {
       clearTimeout(timeoutId);
       setIsLoading(false);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await runGeneration();
   };
 
   return (
@@ -864,10 +873,20 @@ export default function MaterialUploader({ onAnalysisComplete }: MaterialUploade
           {error && (
             <div
               id="uploader-error-alert"
-              className="p-4 bg-rose-950/40 border border-rose-800/60 rounded-xl text-xs font-medium text-rose-200 flex items-center gap-2.5"
+              className="p-4 bg-rose-950/40 border border-rose-800/60 rounded-xl text-xs font-medium text-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
             >
-              <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />
-              <span>{error}</span>
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
+                <span className="leading-relaxed">{error}</span>
+              </div>
+              <button
+                type="button"
+                onClick={runGeneration}
+                disabled={isLoading}
+                className="px-3.5 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/50 text-rose-100 font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 self-end sm:self-center"
+              >
+                Try Again
+              </button>
             </div>
           )}
         </form>

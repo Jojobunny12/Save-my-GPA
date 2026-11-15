@@ -2,8 +2,6 @@ import express from "express";
 import path from "path";
 import dotenv from "dotenv";
 import { GoogleGenAI, ThinkingLevel, Type } from "@google/genai";
-import { createServer as createViteServer } from "vite";
-import { generateAcademicFallbackDeck, generateFallbackQuiz } from "./src/utils/academicFallback";
 
 dotenv.config();
 
@@ -17,9 +15,8 @@ app.use(express.urlencoded({ limit: "50mb", extended: true }));
 let aiClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI | null {
   if (!aiClient) {
-    const key = process.env.GEMINI_API_KEY;
+    const key = process.env.GEMINI_API_KEY?.trim();
     if (!key) {
-      console.warn("GEMINI_API_KEY environment variable is missing. Academic fallback generator will be utilized.");
       return null;
     }
     aiClient = new GoogleGenAI({
@@ -34,18 +31,19 @@ function getGeminiClient(): GoogleGenAI | null {
   return aiClient;
 }
 
-const MODEL_PIPELINE: Array<{ model: string; thinkingLevel: ThinkingLevel }> = [
-  { model: "gemini-4-hydrogen", thinkingLevel: ThinkingLevel.LOW },
-  { model: "gemini-3.1-flash-lite", thinkingLevel: ThinkingLevel.MINIMAL },
+const MODEL_PIPELINE: Array<{ model: string; thinkingLevel: ThinkingLevel; timeoutMs: number }> = [
+  { model: "gemini-4-hydrogen", thinkingLevel: ThinkingLevel.LOW, timeoutMs: 45_000 },
+  { model: "gemini-3.1-flash-lite", thinkingLevel: ThinkingLevel.MINIMAL, timeoutMs: 25_000 },
 ];
 
-const ATTEMPT_TIMEOUT_MS = 20_000;
-const TOTAL_DEADLINE_MS = 35_000;
+const TOTAL_DEADLINE_MS = 72_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error(`TIMEOUT after ${ms}ms (${label})`));
+      const err: any = new Error(`TIMEOUT after ${ms}ms (${label})`);
+      err.status = 504;
+      reject(err);
     }, ms);
     promise.then(
       (val) => {
@@ -68,9 +66,168 @@ function parseGeminiJson(rawText: string): any {
   return JSON.parse(cleaned);
 }
 
-async function executeGeminiWithRetry(
-  callFn: (ai: GoogleGenAI, modelName: string, thinkingLevel: ThinkingLevel) => Promise<any>
-): Promise<any> {
+interface NormalizedQuizItem {
+  question: string;
+  options: string[];
+  correctIndex: number;
+  explanation: string;
+}
+
+function normalizeQuizItems(rawQuiz: any[], targetCount = 25): NormalizedQuizItem[] {
+  if (!Array.isArray(rawQuiz)) {
+    throw new Error("Invalid quiz payload from AI.");
+  }
+
+  const letters = ["A", "B", "C", "D"];
+  const cleaned: NormalizedQuizItem[] = [];
+  const seenQuestions = new Set<string>();
+
+  for (const item of rawQuiz) {
+    const qText = typeof item?.question === "string" ? item.question.trim() : "";
+    const rawOpts = Array.isArray(item?.options)
+      ? item.options.map((o: any) => String(o ?? "").trim()).filter(Boolean)
+      : [];
+    const expText = typeof item?.explanation === "string" ? item.explanation.trim() : "";
+
+    if (!qText || rawOpts.length < 4) continue;
+
+    const qKey = qText.toLowerCase().replace(/\s+/g, " ");
+    if (seenQuestions.has(qKey)) continue;
+    seenQuestions.add(qKey);
+
+    const opts = rawOpts.slice(0, 4).map((opt: string, idx: number) => {
+      const stripped = opt.replace(/^[A-D]\)\s*/i, "").trim();
+      return `${letters[idx]}) ${stripped}`;
+    });
+
+    const rawIdx = Number(item?.correctIndex);
+    const correctIndex = Number.isInteger(rawIdx) && rawIdx >= 0 && rawIdx < 4 ? rawIdx : 0;
+
+    cleaned.push({
+      question: qText,
+      options: opts,
+      correctIndex,
+      explanation: expText || "Review the corresponding unit principle and verify your work step by step.",
+    });
+
+    if (cleaned.length >= targetCount) break;
+  }
+
+  // Ensure every 10-question Matching Set has 100% distinct correct answer cards
+  for (let start = 0; start < cleaned.length; start += 10) {
+    const end = Math.min(start + 10, cleaned.length);
+    const seenAnswersInSet = new Set<string>();
+
+    for (let i = start; i < end; i++) {
+      const q = cleaned[i];
+      const currentCorrect = q.options[q.correctIndex];
+      const canonical = currentCorrect.replace(/^[A-D]\)\s*/i, "").trim().toLowerCase();
+
+      if (seenAnswersInSet.has(currentCorrect.toLowerCase()) || seenAnswersInSet.has(canonical)) {
+        const stripped = currentCorrect.replace(/^[A-D]\)\s*/i, "").trim();
+        const disambiguated = `${letters[q.correctIndex]}) ${stripped} [Item ${i + 1}]`;
+        q.options[q.correctIndex] = disambiguated;
+        seenAnswersInSet.add(disambiguated.toLowerCase());
+      } else {
+        seenAnswersInSet.add(currentCorrect.toLowerCase());
+        seenAnswersInSet.add(canonical);
+      }
+    }
+  }
+
+  return cleaned;
+}
+
+function validateAndNormalizeDeck(payload: any) {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Empty or malformed study deck from AI.");
+  }
+
+  const summary = payload.summary;
+  if (!summary || typeof summary.title !== "string" || typeof summary.coreCheatSheetMarkdown !== "string") {
+    throw new Error("Incomplete study summary returned by AI.");
+  }
+
+  const timeline = Array.isArray(payload.timeline) ? payload.timeline.slice(0, 5) : [];
+  if (timeline.length === 0) {
+    throw new Error("Incomplete 5-day study timeline returned by AI.");
+  }
+
+  const flashcards = Array.isArray(payload.flashcards)
+    ? payload.flashcards
+        .filter((f: any) => typeof f?.question === "string" && typeof f?.answer === "string" && f.question.trim() && f.answer.trim())
+        .map((f: any) => ({ question: f.question.trim(), answer: f.answer.trim() }))
+    : [];
+
+  if (flashcards.length < 8) {
+    throw new Error("Insufficient curriculum flashcards returned by AI.");
+  }
+
+  const quiz = normalizeQuizItems(payload.quiz, 25);
+  if (quiz.length < 15) {
+    throw new Error(`AI returned too few valid quiz questions (${quiz.length}).`);
+  }
+
+  return {
+    summary: {
+      title: summary.title.trim(),
+      curriculumExplanation: String(summary.curriculumExplanation || "").trim(),
+      topTipsForFinal: Array.isArray(summary.topTipsForFinal)
+        ? summary.topTipsForFinal.map((t: any) => String(t).trim()).filter(Boolean).slice(0, 5)
+        : [],
+      synthesizedNotesParagraph: String(summary.synthesizedNotesParagraph || "").trim(),
+      coreCheatSheetMarkdown: summary.coreCheatSheetMarkdown.trim(),
+    },
+    timeline,
+    flashcards,
+    quiz,
+  };
+}
+
+function extractErrorStatusAndMessage(err: any): { status: number; message: string } {
+  const rawMsg = String(err?.message || "Unexpected Gemini API error.");
+  const lower = rawMsg.toLowerCase();
+  const code = Number(err?.status || err?.code || 0);
+
+  if (rawMsg === "NO_API_KEY") {
+    return {
+      status: 500,
+      message: "GEMINI_API_KEY is not configured on the server. Add it in Settings > Secrets and try again.",
+    };
+  }
+  if (code === 400 || code === 403 || lower.includes("api_key_invalid") || lower.includes("permission_denied")) {
+    return {
+      status: code === 403 ? 403 : 400,
+      message: "Gemini API key was rejected or lacks permission. Verify GEMINI_API_KEY in Settings > Secrets.",
+    };
+  }
+  if (code === 404 || lower.includes("not_found")) {
+    return {
+      status: 404,
+      message: `Requested Gemini model was not found: ${rawMsg}`,
+    };
+  }
+  if (code === 504 || lower.includes("timeout") || lower.includes("time budget")) {
+    return {
+      status: 504,
+      message: "Live AI generation timed out while building your D'Evelyn exam deck. Please click Try Again.",
+    };
+  }
+  if (code === 503 || code === 429 || lower.includes("high demand") || lower.includes("unavailable") || lower.includes("resource_exhausted")) {
+    return {
+      status: 503,
+      message: "Gemini AI is temporarily experiencing high demand. Please wait a moment and click Try Again.",
+    };
+  }
+  return {
+    status: 502,
+    message: `Live AI generation failed: ${rawMsg}`,
+  };
+}
+
+async function executeGeminiWithRetry<T>(
+  callFn: (ai: GoogleGenAI, modelName: string, thinkingLevel: ThinkingLevel) => Promise<T>
+): Promise<T> {
   const ai = getGeminiClient();
   if (!ai) {
     throw new Error("NO_API_KEY");
@@ -79,61 +236,69 @@ async function executeGeminiWithRetry(
   const startedAt = Date.now();
   let lastError: any = null;
 
-  for (const { model, thinkingLevel } of MODEL_PIPELINE) {
+  for (const { model, thinkingLevel, timeoutMs: modelBudget } of MODEL_PIPELINE) {
     for (let attempt = 0; attempt < 2; attempt++) {
       const elapsed = Date.now() - startedAt;
       const remaining = TOTAL_DEADLINE_MS - elapsed;
-      if (remaining <= 2000) {
+      if (remaining <= 3000) {
         throw lastError || new Error("Gemini request exceeded total time budget.");
       }
 
-      const timeoutMs = Math.min(ATTEMPT_TIMEOUT_MS, remaining);
+      const timeoutMs = Math.min(modelBudget, remaining);
       try {
-        const result = await withTimeout(
+        return await withTimeout(
           callFn(ai, model, thinkingLevel),
           timeoutMs,
           `${model}#${attempt + 1}`
         );
-        return result;
       } catch (err: any) {
         lastError = err;
-        const msg = (err?.message || "").toLowerCase();
-        const isTimeout = msg.includes("timeout");
-        const isUnavailableOrRateLimited =
-          err?.status === 503 ||
-          err?.status === 429 ||
-          err?.code === 503 ||
-          err?.code === 429 ||
+        const msg = String(err?.message || "").toLowerCase();
+        const code = Number(err?.status || err?.code || 0);
+
+        console.warn(`Gemini ${model} attempt ${attempt + 1} failed (${code || "ERR"}): ${err?.message}`);
+
+        // Do not retry bad auth/model errors
+        if (code === 400 || code === 403 || code === 404 || msg.includes("api_key_invalid") || msg.includes("permission_denied")) {
+          throw err;
+        }
+
+        const isTimeout = code === 504 || msg.includes("timeout");
+        if (isTimeout) {
+          // Move straight to the faster backup model on timeout
+          break;
+        }
+
+        const isTransient =
+          code === 503 ||
+          code === 429 ||
+          code === 500 ||
           msg.includes("503") ||
+          msg.includes("429") ||
           msg.includes("unavailable") ||
           msg.includes("high demand") ||
           msg.includes("resource_exhausted") ||
-          msg.includes("rate");
+          msg.includes("rate") ||
+          msg.includes("incomplete") ||
+          msg.includes("too few") ||
+          msg.includes("json");
 
-        console.warn(`Gemini ${model} attempt ${attempt + 1} failed (${err?.status || err?.code || "ERR"}): ${err?.message}`);
-
-        if (isTimeout) {
-          // Move straight to the faster fallback model on timeout
-          break;
-        }
-
-        if (isUnavailableOrRateLimited && attempt === 0) {
-          const backoffMs = Math.min(800, Math.max(0, TOTAL_DEADLINE_MS - (Date.now() - startedAt) - 2000));
-          if (backoffMs > 100) {
+        if (isTransient && attempt === 0) {
+          const backoffMs = Math.min(1200, Math.max(0, TOTAL_DEADLINE_MS - (Date.now() - startedAt) - 4000));
+          if (backoffMs > 150) {
             await new Promise((resolve) => setTimeout(resolve, backoffMs));
           }
           continue;
-        } else {
-          break;
         }
+        break;
       }
     }
   }
 
-  throw lastError || new Error("All Gemini models temporarily unavailable.");
+  throw lastError || new Error("All live Gemini models failed to respond.");
 }
 
-// REST API endpoint to analyze study materials and map to dynamic high school curriculums
+// REST API endpoint to analyze study materials and generate a live AI D'Evelyn curriculum deck
 app.post("/api/analyze-finals-material", async (req, res) => {
   try {
     const {
@@ -156,237 +321,168 @@ app.post("/api/analyze-finals-material", async (req, res) => {
       return;
     }
 
-    const ai = getGeminiClient();
     const activeSchool = schoolName || "D'Evelyn High School";
     const activeCourseName = courseName || `Course ${courseCode}`;
     const unitsList: string[] = Array.isArray(units) ? units : [];
-    const formattedUnits = unitsList.length > 0
-      ? unitsList.map((u, idx) => `  ${idx + 1}. ${u}`).join("\n")
-      : "Deduce full unit sequence from official course syllabus";
+    const formattedUnits =
+      unitsList.length > 0
+        ? unitsList.map((u, idx) => `  ${idx + 1}. ${u}`).join("\n")
+        : "Cover the complete cumulative D'Evelyn syllabus for this course.";
 
-    // Prepare contents array for Gemini
-    const systemPrompt = `You are an expert Academic Coach specializing in rigorous high school and AP curriculums, with a clear, encouraging, and academically rigorous instruction style.
-This study platform helps students preparing for final exams at "${activeSchool}" based on their Course Code: "${courseCode}" (and course name if specified: "${activeCourseName}").
+    const systemPrompt = `You are a veteran D'Evelyn Jr./Sr. High School department chair and AP/Honors exam writer designing an elite finals preparation deck for "${activeCourseName}" (${courseCode}, Department: ${department || "Academic"}) at "${activeSchool}".
 
-No study notes or PDF files are required! Your goal is to:
-1. Deconstruct the Course Code "${courseCode}" to determine the level, subject, and department (e.g. "SCI_CHEM_H" -> Chemistry Honors, "ENG09" -> Literature & Composition 9, "MATH_AP_CALC_AB" -> AP Calculus AB, "10157H05012" -> AP Computer Science A).
-2. Generate a complete, high-yield finals preparation study deck covering EVERY listed course unit evenly across the cheat sheet, flashcards, 5-day timeline, and 25-question mock exam.
+STRICT SUBJECT LOCK:
+- Every single flashcard, cheat sheet section, study tip, timeline day, and ALL 25 mock exam questions MUST strictly belong to "${activeCourseName}" (${department || "this exact subject"}).
+- Never cross over into unrelated subjects (for example, never put Computer Science/Java in a Mathematics course, and never put generic study-habit advice inside flashcards or quiz questions).
 
-CRITICAL FORMULA & MATH RENDERING GUIDELINES:
-- DO NOT USE RAW LATEX SYMBOLS OR MATH BLOCKS (such as \\frac{a}{b}, \\sqrt{x}, \\bar{x}, \\hat{p}, \\pm, or $$...$$ / $...$) in your output, as standard browsers cannot render them without complex compilation packages.
-- INSTEAD, write ALL mathematical formulas, fractions, limits, integrals, statistics terms, or balances in clean, readable plain unicode text.
-- Examples of how to write formulas cleanly in your markdown or output:
-  - Write standard error as "SE_x̅ = s / √n" or "SE(_x-bar) = s / sqrt(n)"
-  - Write standard error of proportion as "SE_p̂ = √(p̂(1 - p̂) / n)"
-  - Write confidence interval as "Statistic ± (Critical Value) * (Standard Error)"
-  - Write t-statistic as "t = (x̅ - μ0) / (s / √n) with df = n - 1"
-  - Write slope formula as "m = (y2 - y1) / (x2 - x1)"
-  - Write chemical equations as "2H2 + O2 --> 2H2O" with simple subscript style.
-  - Write limits as "lim (x -> c) f(x) = L"
-- This keeps the study cards, notes, and cheat sheets completely clean and readable!
-
-TONE & QUALITY GUIDELINES:
-- Keep the tone focused, encouraging, clear, and student-friendly—completely free of internet slang, memes, or distracting filler jokes.
-- Maintain 100% textbook accuracy for all formulas, dates, proofs, code snippets, and explanations! Keep math unicode clean and LaTeX-free!
-
-CRITICAL QUIZ CONTENT REQUIREMENT:
-- EVERY single quiz question MUST be a real, high-value academic study question directly testing core facts, formulas, theorems, dates, grammar patterns, historical figures, code traces, or problems from the specified units of this course curriculum.
-- Distribute the 25 quiz questions cleanly across ALL target course units listed below so no unit is left untested.
-- Under NO circumstances generate filler questions about study habits or generic test-taking advice as the actual question. Every question must test real subject content.
-
-The Course metadata we compiled:
-- Course Code: ${courseCode}
-- High School: ${activeSchool}
-- Provided Course Name: ${activeCourseName}
-- Department: ${department || "Deduce from code"}
-- Typical Curriculum Focus: ${curriculumDetails || "Deduce from code standards"}
-- Typical Finals Exam Format: ${examFocus || "Traditional honors cumulative exam"}
-- Core Recommended Strategy: ${studyStrategy || "Deduce optimal approach"}
-- Target Curriculum Units to Cover:
+PREDICTIVE D'EVELYN FINALS QUALITY STANDARD:
+- Ground every item in the exact D'Evelyn textbooks, problem types, proofs, theorems, primary sources, or labs listed below:
+  - Course Overview & Texts: ${curriculumDetails || "Official D'Evelyn honors/cumulative syllabus"}
+  - How Finals Are Tested: ${examFocus || "Cumulative honors/AP rigorous examination"}
+  - Core Strategy: ${studyStrategy || "Active retrieval and rigorous problem execution"}
+- Target Curriculum Units to Predict & Cover Evenly:
 ${formattedUnits}
 
-Student's Added Notes or Target Focus: ${additionalNotes || "None"}
+FLASHCARD REQUIREMENTS (14 to 16 cards):
+- Do NOT write vague glossary definitions or generic study-habit advice.
+- Each flashcard MUST predict high-probability D'Evelyn exam items: exact non-calculator values, worked micro-problems, theorem hypotheses/conditions, common exam traps/extraneous root checks, primary-source arguments, syntax/grammar rules, or code-trace outputs.
+- Format answers with the crisp answer first followed by the exact formula, condition, or key pitfall to remember.
 
-Please extract the core technical vocabulary, formulas, equations, texts, themes, key figures, or rules across every listed unit, and project how they will be tested on cumulative high school finals.
+MOCK EXAM REQUIREMENTS (EXACTLY 25 questions):
+- Distribute the 25 questions evenly across ALL listed Target Curriculum Units.
+- Write authentic, challenging, textbook-accurate questions with realistic numbers, equations, historical arguments, literary excerpts, language conjugations, or code snippets.
+- MATCHING POOL UNIQUENESS CONSTRAINT: Questions are grouped into sets of 10 (Q1-Q10, Q11-Q20, Q21-Q25) where students match questions to correct answer cards. Within each set of 10 questions (1-10, 11-20, 21-25), ALL 10 correct answer choices MUST be completely distinct values/phrases (never allow two questions in the same 10-question set to have identical correct answer strings like both having "1", "0", or "True").
+- Provide 4 distinct options formatted strictly as ["A) ...", "B) ...", "C) ...", "D) ..."], with correctIndex in 0..3 and a crisp 1-2 sentence step-by-step explanation.
 
-You must reply with a valid JSON object matching the exact structure requested, with no markdown code blocks surrounding it (return pure JSON text directly) with the following schema:
-{
-  "summary": {
-    "title": string (A clear, professional custom study companion title specific to this course and materials, e.g., 'AP Chemistry: Equilibrium & Stoichiometry Final Review' or 'Western Civilization: Medieval to Modern Synthesis Guide'),
-    "curriculumExplanation": string (A clear academic overview mapping how this set of study concepts aligns with the course's syllabus and final exam expectations),
-    "topTipsForFinal": [string] (Exactly 3-4 tactical, subject-specific exam preparation tips, e.g., 'Verify your stoichiometric unit cancellations on every step to prevent sign or factor errors' or 'Review Caesar\'s Indirect Statements and subjunctive triggers before translating sight passages'),
-    "synthesizedNotesParagraph": string (A thorough, academically authoritative narrative summary of the core study concepts for this course, serving as a rapid refresher),
-    "coreCheatSheetMarkdown": string (A dense, well-structured Markdown-formatted review sheet representing the foundational knowledge, equations, dates, declensions, or code patterns for this specific Course Code)
-  },
-  "timeline": [
-    {
-      "dayName": string (e.g., 'Day 1: Core Foundations', 'Day 2: Problem Sets & Proofs', 'Day 5: Final Review & Rest'),
-      "activityTitle": string,
-      "activityDescription": string
-    }
-  ] (Plan a 5-day study countdown leading to their final),
-  "flashcards": [
-    {
-      "question": string,
-      "answer": string
-    }
-  ] (Provide 8 to 12 active-recall flashcards for key vocabulary, names, theorems, conjugations, or equations),
-  "quiz": [
-    {
-      "question": string (A rigorous and specific quiz question. For math/science/CS, include realistic values or short code traces. Keep it concise and punchy. Must be a genuine academic test question),
-      "options": [string] (Provide exactly 4 distinct options, e.g. ["A) ...", "B) ...", "C) ...", "D) ..."]),
-      "correctIndex": number (0 to 3),
-      "explanation": string (A clear, step-by-step explanation of why this choice is correct and why common distractors are wrong.)
-    }
-  ] (Provide exactly 25 high-quality multiple-choice questions. Be concise and crisp to guarantee swift parsing!)
-}`;
+FORMULA & TONE RULES:
+- Use clean, readable plain Unicode math (e.g., "sin²(θ) + cos²(θ) = 1", "log₂(64) = 6", "√(b² - 4ac)", "π/6", "ΔH < 0", "x̅", "p̂"). NEVER use raw LaTeX ($...$, $$...$$, \\frac, \\sqrt, \\bar).
+- Keep the tone focused, sharp, and academic—no slang, memes, or filler jokes.
 
-    const promptMessage = `Create a comprehensive study companion deck for my course code: ${courseCode}. You MUST generate EXACTLY 25 multiple choice questions inside the "quiz" array. Keep each question's text and options clear, concise, and academically accurate with exact equations, historical arguments, literary concepts, or code traces.
-${pastedText ? `My additional notes/study guide reference:
-"""
-${pastedText}
-"""` : ""}`;
+Student Context: ${additionalNotes || "Cumulative semester final review"}
+
+Return ONLY valid JSON matching the schema with:
+- summary: { title, curriculumExplanation, topTipsForFinal (4 subject-specific tactics), synthesizedNotesParagraph, coreCheatSheetMarkdown (dense unit-by-unit formulas/theorems/dates cheat sheet) }
+- timeline: 5 days mapped directly to the selected units
+- flashcards: 14 to 16 predictive D'Evelyn exam flashcards
+- quiz: EXACTLY 25 unique cumulative multiple-choice questions`;
+
+    const promptMessage = `Build the complete predictive D'Evelyn finals study deck for ${activeCourseName} (${courseCode}). Cover every listed unit across 14–16 predictive flashcards, a dense unit-by-unit cheat sheet, a 5-day schedule, and EXACTLY 25 unique multiple-choice questions with distinct correct answers per 10-question set.${
+      pastedText ? `\n\nReference material:\n"""\n${String(pastedText).slice(0, 15000)}\n"""` : ""
+    }`;
 
     const contents: any[] = [];
-
-    // If a base64 file is attached, add it as a part
     if (fileBase64 && fileMimeType) {
-      try {
-        const cleanBase64 = fileBase64.replace(/^data:.*;base64,/, "");
-        contents.push({
-          inlineData: {
-            mimeType: fileMimeType,
-            data: cleanBase64,
-          },
-        });
-      } catch (fileErr) {
-        console.error("Error setting inlineData for Gemini:", fileErr);
-      }
+      const cleanBase64 = String(fileBase64).replace(/^data:.*;base64,/, "");
+      contents.push({
+        inlineData: {
+          mimeType: fileMimeType,
+          data: cleanBase64,
+        },
+      });
     }
-
     contents.push({ text: promptMessage });
 
-    try {
-      const response = await executeGeminiWithRetry(async (aiInstance, modelName, thinkingLevel) => {
-        return await aiInstance.models.generateContent({
-          model: modelName,
-          contents: contents,
-          config: {
-            systemInstruction: systemPrompt,
-            thinkingConfig: { thinkingLevel },
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              required: ["summary", "timeline", "flashcards", "quiz"],
-              properties: {
-                summary: {
+    const normalizedDeck = await executeGeminiWithRetry(async (aiInstance, modelName, thinkingLevel) => {
+      const response = await aiInstance.models.generateContent({
+        model: modelName,
+        contents,
+        config: {
+          systemInstruction: systemPrompt,
+          thinkingConfig: { thinkingLevel },
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            required: ["summary", "timeline", "flashcards", "quiz"],
+            properties: {
+              summary: {
+                type: Type.OBJECT,
+                required: [
+                  "title",
+                  "curriculumExplanation",
+                  "topTipsForFinal",
+                  "synthesizedNotesParagraph",
+                  "coreCheatSheetMarkdown",
+                ],
+                properties: {
+                  title: { type: Type.STRING },
+                  curriculumExplanation: { type: Type.STRING },
+                  topTipsForFinal: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                  },
+                  synthesizedNotesParagraph: { type: Type.STRING },
+                  coreCheatSheetMarkdown: { type: Type.STRING },
+                },
+              },
+              timeline: {
+                type: Type.ARRAY,
+                items: {
                   type: Type.OBJECT,
-                  required: [
-                    "title",
-                    "curriculumExplanation",
-                    "topTipsForFinal",
-                    "synthesizedNotesParagraph",
-                    "coreCheatSheetMarkdown",
-                  ],
+                  required: ["dayName", "activityTitle", "activityDescription"],
                   properties: {
-                    title: { type: Type.STRING },
-                    curriculumExplanation: { type: Type.STRING },
-                    topTipsForFinal: {
+                    dayName: { type: Type.STRING },
+                    activityTitle: { type: Type.STRING },
+                    activityDescription: { type: Type.STRING },
+                  },
+                },
+              },
+              flashcards: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  required: ["question", "answer"],
+                  properties: {
+                    question: { type: Type.STRING },
+                    answer: { type: Type.STRING },
+                  },
+                },
+              },
+              quiz: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  required: ["question", "options", "correctIndex", "explanation"],
+                  properties: {
+                    question: { type: Type.STRING },
+                    options: {
                       type: Type.ARRAY,
                       items: { type: Type.STRING },
                     },
-                    synthesizedNotesParagraph: { type: Type.STRING },
-                    coreCheatSheetMarkdown: { type: Type.STRING },
-                  },
-                },
-                timeline: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    required: ["dayName", "activityTitle", "activityDescription"],
-                    properties: {
-                      dayName: { type: Type.STRING },
-                      activityTitle: { type: Type.STRING },
-                      activityDescription: { type: Type.STRING },
-                    },
-                  },
-                },
-                flashcards: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    required: ["question", "answer"],
-                    properties: {
-                      question: { type: Type.STRING },
-                      answer: { type: Type.STRING },
-                    },
-                  },
-                },
-                quiz: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    required: ["question", "options", "correctIndex", "explanation"],
-                    properties: {
-                      question: { type: Type.STRING },
-                      options: {
-                        type: Type.ARRAY,
-                        items: { type: Type.STRING },
-                      },
-                      correctIndex: { type: Type.INTEGER },
-                      explanation: { type: Type.STRING },
-                    },
+                    correctIndex: { type: Type.INTEGER },
+                    explanation: { type: Type.STRING },
                   },
                 },
               },
             },
           },
-        });
+        },
       });
 
       const replyText = response?.text;
       if (!replyText) {
         throw new Error("Empty response from Gemini API.");
       }
-
-      const payload = parseGeminiJson(replyText);
-      res.json(payload);
-    } catch (apiErr: any) {
-      console.warn("Gemini API unavailable or experienced rate/503 limits. Generating academic fallback deck:", apiErr?.message);
-      const fallbackDeck = generateAcademicFallbackDeck({
-        schoolName: activeSchool,
-        courseCode: courseCode,
-        courseName: activeCourseName,
-        department: department,
-        curriculumDetails: curriculumDetails,
-        examFocus: examFocus,
-        studyStrategy: studyStrategy,
-        units: unitsList,
-      });
-      res.json(fallbackDeck);
-    }
-  } catch (error: any) {
-    console.error("General study helper endpoint failure:", error);
-    // Last-resort fallback
-    const targetCode = req.body?.courseCode || "GEN101";
-    const fallbackDeck = generateAcademicFallbackDeck({
-      schoolName: req.body?.schoolName,
-      courseCode: targetCode,
-      courseName: req.body?.courseName,
-      department: req.body?.department,
-      units: Array.isArray(req.body?.units) ? req.body.units : [],
+      const parsed = parseGeminiJson(replyText);
+      return validateAndNormalizeDeck(parsed);
     });
-    res.json(fallbackDeck);
+
+    res.json(normalizedDeck);
+  } catch (err: any) {
+    console.error("Live AI study deck generation failed:", err);
+    const { status, message } = extractErrorStatusAndMessage(err);
+    res.status(status).json({ error: message });
   }
 });
 
-// REST API endpoint to generate 25 more questions on demand
+// REST API endpoint to generate 25 more live AI questions on demand
 app.post("/api/generate-more-questions", async (req, res) => {
   try {
     const {
       courseCode,
       courseName,
       department,
+      curriculumDetails,
+      examFocus,
       units,
       existingQuestions,
     } = req.body;
@@ -398,83 +494,56 @@ app.post("/api/generate-more-questions", async (req, res) => {
 
     const activeCourseName = courseName || `Course ${courseCode}`;
     const unitsList: string[] = Array.isArray(units) ? units : [];
-    const unitsBlock = unitsList.length > 0
-      ? `\nTarget Course Units to Cover Evenly:\n${unitsList.map((u, idx) => `- ${idx + 1}. ${u}`).join("\n")}\n`
-      : "";
+    const unitsBlock =
+      unitsList.length > 0
+        ? `\nTarget Course Units to Cover Evenly:\n${unitsList.map((u, idx) => `- ${idx + 1}. ${u}`).join("\n")}\n`
+        : "";
 
-    const systemPrompt = `You are an expert Academic Coach specializing in rigorous high school and AP curriculums, with a clear, encouraging, and academically rigorous instruction style.
+    const systemPrompt = `You are a veteran D'Evelyn Jr./Sr. High School exam writer crafting 25 brand-new cumulative mock final questions for "${activeCourseName}" (${courseCode}, Department: ${department || "Academic"}).
+${curriculumDetails ? `Textbook & Syllabus Context: ${curriculumDetails}\n` : ""}${examFocus ? `Exam Rigor & Focus: ${examFocus}\n` : ""}${unitsBlock}
+STRICT RULES:
+- Every question MUST test real, challenging subject matter from "${activeCourseName}" and predict actual honors/AP/Saxon exam items.
+- Do NOT write generic study-tip questions or drift into any other subject.
+- MATCHING POOL UNIQUENESS CONSTRAINT: Within every group of 10 questions (Q1-Q10, Q11-Q20, Q21-Q25), ALL 10 correct answer strings MUST be completely distinct values/phrases so no two questions in the same set share the same answer text.
+- Format options strictly as ["A) ...", "B) ...", "C) ...", "D) ..."] with correctIndex in 0..3 and crisp 1-2 sentence explanations.
+- Use clean Unicode math only (no raw LaTeX $$, \\frac, \\sqrt).
 
-Your goal is to generate 25 MORE completely custom, academically rigorous multiple-choice questions for Course Code: "${courseCode}" (official name: "${activeCourseName}").
-${unitsBlock}
+DO NOT repeat or closely paraphrase any of these existing questions:
+${(existingQuestions || []).map((q: any) => `- ${q.question}`).slice(0, 60).join("\n")}`;
 
-CRITICAL FORMULA & MATH RENDERING GUIDELINES:
-- DO NOT USE RAW LATEX SYMBOLS OR MATH BLOCKS (such as \\frac{a}{b}, \\sqrt{x}, \\bar{x}, \\hat{p}, \\pm, or $$...$$ / $...$) in your output.
-- INSTEAD, write ALL mathematical formulas, fractions, limits, integrals, statistics terms, or balances in clean, readable plain unicode text.
-- Examples of how to write formulas cleanly in your output:
-  - Write standard error as "SE_x̅ = s / √n" or "SE(_x-bar) = s / sqrt(n)"
-  - Write standard error of proportion as "SE_p̂ = √(p̂(1 - p̂) / n)"
-  - Write confidence interval as "Statistic ± (Critical Value) * (Standard Error)"
-  - Write slope formula as "m = (y2 - y1) / (x2 - x1)"
-  - Write limits as "lim (x -> c) f(x) = L"
+    const promptMessage = `Generate EXACTLY 25 brand-new predictive multiple-choice questions inside the "quiz" array for ${activeCourseName} (${courseCode}).`;
 
-TONE & QUALITY GUIDELINES:
-- Keep the tone focused, encouraging, clear, and student-friendly—completely free of internet slang, memes, or distracting filler jokes.
-- Maintain 100% textbook accuracy for all formulas, dates, proofs, code snippets, and explanations.
-
-CRITICAL QUIZ CONTENT REQUIREMENT:
-- EVERY single quiz question MUST be a real, high-value academic study question directly testing core facts, formulas, theorems, dates, grammar patterns, historical figures, code traces, or problems from this course curriculum.
-- Under NO circumstances generate filler questions about study habits or generic test-taking advice as the actual question. Every question must test real subject facts.
-
-DO NOT duplicate any of the following questions that are already in the student's study deck:
-${(existingQuestions || []).map((q: any) => `- ${q.question}`).slice(0, 50).join("\n")}
-
-Please respond with a valid JSON object matching the exact structure requested, with no markdown code blocks surrounding it (return pure JSON text directly) with the following schema:
-{
-  "quiz": [
-    {
-      "question": string (A rigorous and specific quiz question. For math/science/CS, include realistic values or short code traces. Keep it concise and punchy. Must be a genuine academic test question),
-      "options": [string] (Provide exactly 4 distinct options, e.g. ["A) ...", "B) ...", "C) ...", "D) ..."]),
-      "correctIndex": number (0 to 3),
-      "explanation": string (A clear, step-by-step explanation of why this choice is correct and why common distractors are wrong.)
-    }
-  ]
-} (Provide exactly 25 high-quality multiple-choice questions. Be concise and crisp to guarantee swift parsing!)`;
-
-    const promptMessage = `Generate 25 MORE unique multiple choice questions inside the "quiz" array for my course code: ${courseCode}. Keep all subject details fully accurate with master equations, historical arguments, literary concepts, or code traces, and keep explanations clear and helpful.`;
-
-    try {
-      const response = await executeGeminiWithRetry(async (aiInstance, modelName, thinkingLevel) => {
-        return await aiInstance.models.generateContent({
-          model: modelName,
-          contents: promptMessage,
-          config: {
-            systemInstruction: systemPrompt,
-            thinkingConfig: { thinkingLevel },
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              required: ["quiz"],
-              properties: {
-                quiz: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    required: ["question", "options", "correctIndex", "explanation"],
-                    properties: {
-                      question: { type: Type.STRING },
-                      options: {
-                        type: Type.ARRAY,
-                        items: { type: Type.STRING },
-                      },
-                      correctIndex: { type: Type.INTEGER },
-                      explanation: { type: Type.STRING },
+    const normalizedQuiz = await executeGeminiWithRetry(async (aiInstance, modelName, thinkingLevel) => {
+      const response = await aiInstance.models.generateContent({
+        model: modelName,
+        contents: promptMessage,
+        config: {
+          systemInstruction: systemPrompt,
+          thinkingConfig: { thinkingLevel },
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            required: ["quiz"],
+            properties: {
+              quiz: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  required: ["question", "options", "correctIndex", "explanation"],
+                  properties: {
+                    question: { type: Type.STRING },
+                    options: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING },
                     },
+                    correctIndex: { type: Type.INTEGER },
+                    explanation: { type: Type.STRING },
                   },
                 },
               },
             },
           },
-        });
+        },
       });
 
       const replyText = response?.text;
@@ -482,23 +551,26 @@ Please respond with a valid JSON object matching the exact structure requested, 
         throw new Error("Empty response from Gemini API.");
       }
 
-      const payload = parseGeminiJson(replyText);
-      res.json(payload);
-    } catch (apiErr: any) {
-      console.warn("Gemini API unavailable for extra questions. Generating academic fallback questions:", apiErr?.message);
-      const fallbackQuestions = generateFallbackQuiz(activeCourseName, courseCode, department || "General", 25);
-      res.json({ quiz: fallbackQuestions });
-    }
-  } catch (error: any) {
-    console.error("General more questions endpoint failure:", error);
-    const fallbackQuestions = generateFallbackQuiz(req.body?.courseName || "General Course", req.body?.courseCode || "GEN101", req.body?.department || "General", 25);
-    res.json({ quiz: fallbackQuestions });
+      const parsed = parseGeminiJson(replyText);
+      const quiz = normalizeQuizItems(parsed?.quiz, 25);
+      if (quiz.length < 15) {
+        throw new Error(`AI returned too few valid questions (${quiz.length}).`);
+      }
+      return quiz;
+    });
+
+    res.json({ quiz: normalizedQuiz });
+  } catch (err: any) {
+    console.error("Live AI generate-more-questions failed:", err);
+    const { status, message } = extractErrorStatusAndMessage(err);
+    res.status(status).json({ error: message });
   }
 });
 
 // Serve frontend assets
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",

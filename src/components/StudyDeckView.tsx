@@ -17,679 +17,10 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
   const timeline = deck.timeline || [];
   const topTips = deck.summary?.topTipsForFinal || [];
 
-  // Stable memoized 100 multiple-choice questions
+  // Live AI cumulative mock exam questions (no off-subject fallback padding)
   const organizedQuiz = React.useMemo(() => {
-    const originalQuestions = [...(deck.quiz || [])];
-    
-    // If we already have 100 or more, just keep them or slice to 100
-    if (originalQuestions.length >= 100) {
-      return originalQuestions.slice(0, 100);
-    }
-    
-    // Deduce department to provide actual, high-yield academic study questions
-    const deduced = deduceCourse(deck.courseCode || "");
-    let deducedDept: "MATH" | "SCIENCE" | "HISTORY" | "LANGUAGE" | "ENGLISH" | "ARTS" | "ELECTIVES" | "GENERAL" = "GENERAL";
-
-    if (deduced.department === "Mathematics") {
-      deducedDept = "MATH";
-    } else if (deduced.department === "Science") {
-      deducedDept = "SCIENCE";
-    } else if (deduced.department === "Social Studies") {
-      deducedDept = "HISTORY";
-    } else if (deduced.department === "Foreign Language") {
-      deducedDept = "LANGUAGE";
-    } else if (deduced.department === "English") {
-      deducedDept = "ENGLISH";
-    } else if (deduced.department === "Fine Arts") {
-      deducedDept = "ARTS";
-    } else if (deduced.department === "Electives") {
-      deducedDept = "ELECTIVES";
-    }
-
-    // High quality academic question pool that serves real educational value
-    const academicPools = {
-      MATH: [
-        {
-          question: "Solve the quadratic equation x² - 8x + 15 = 0 for x.",
-          options: [
-            "A) x = 3 or x = 5",
-            "B) x = -3 or x = -5",
-            "C) x = 2 or x = 6",
-            "D) x = 1 or x = 15"
-          ],
-          correctIndex: 0,
-          explanation: "Factoring x² - 8x + 15 gives (x - 3)(x - 5) = 0. Therefore, the roots are x = 3 and x = 5. Highly authentic standard algebra outcome!"
-        },
-        {
-          question: "What is the exact value of sin(2θ) if sin(θ) = 3/5 and θ is in Quadrant I?",
-          options: [
-            "A) 24/25",
-            "B) 12/25",
-            "C) 6/5",
-            "D) 7/25"
-          ],
-          correctIndex: 0,
-          explanation: "In Quadrant I, cos(θ) = 4/5 (using the Pythagorean identity or 3-4-5 triangle). Using the double-angle formula: sin(2θ) = 2 sin(θ) cos(θ) = 2 * (3/5) * (4/5) = 24/25."
-        },
-        {
-          question: "For the geometric sequence 3, 6, 12, 24, ..., find the exact 8th term of the series.",
-          options: [
-            "A) 384",
-            "B) 192",
-            "C) 768",
-            "D) 512"
-          ],
-          correctIndex: 0,
-          explanation: "The common ratio r is 2. The nth term formula is a_n = a_1 * r^(n-1). So the 8th term is a_8 = 3 * 2⁷ = 3 * 128 = 384."
-        },
-        {
-          question: "Determine the vertex coordinates of the parabola represented by the equation y = 2x² - 12x + 11.",
-          options: [
-            "A) (3, -7)",
-            "B) (-3, 7)",
-            "C) (3, 11)",
-            "D) (6, -25)"
-          ],
-          correctIndex: 0,
-          explanation: "The x-coordinate of the vertex is h = -b / (2a) = -(-12) / (2 * 2) = 3. Substituting x = 3, we get y = 2(3)² - 12(3) + 11 = 18 - 36 + 11 = -7. Thus, the vertex is (3, -7)."
-        },
-        {
-          question: "Find the exact distance in the Cartesian coordinate plane between (2, -3) and (-4, 5).",
-          options: [
-            "A) 10 units",
-            "B) 2√5 units",
-            "C) √50 units",
-            "D) 8 units"
-          ],
-          correctIndex: 0,
-          explanation: "Using the distance formula: d = √((x₂ - x₁)² + (y₂ - y₁)²) = √((-4 - 2)² + (5 - (-3))²) = √((-6)² + 8²) = √(36 + 64) = √100 = 10."
-        },
-        {
-          question: "Evaluate the analytical limit: lim (x -> 3) (x² - 9) / (x - 3).",
-          options: [
-            "A) 6",
-            "B) 3",
-            "C) 0",
-            "D) Undefined (Does not exist)"
-          ],
-          correctIndex: 0,
-          explanation: "Factoring the numerator yields (x - 3)(x + 3) / (x - 3). Cancelling the (x - 3) factor leaves (x + 3). Evaluating at x = 3 yields 3 + 3 = 6."
-        },
-        {
-          question: "What is the slope of a straight line perpendicular to the line represented by 3x - 4y = 12?",
-          options: [
-            "A) -4/3",
-            "B) 4/3",
-            "C) 3/4",
-            "D) -3/4"
-          ],
-          correctIndex: 0,
-          explanation: "Converting the given equation to slope-intercept form gives y = (3/4)x - 3, so its slope is 3/4. The perpendicular slope is the negative reciprocal: -4/3."
-        },
-        {
-          question: "Solve the logarithmic equation for x: e^(2x - 1) = 5.",
-          options: [
-            "A) x = (ln(5) + 1) / 2",
-            "B) x = ln(3)",
-            "C) x = ln(5) / 2",
-            "D) x = 2 ln(5) + 1"
-          ],
-          correctIndex: 0,
-          explanation: "Taking the natural logarithm of both sides gives 2x - 1 = ln(5). Adding 1 and dividing by 2 yields x = (ln(5) + 1) / 2."
-        },
-        {
-          question: "Identify the asymptotic equations for the hyperbola represented by x²/16 - y²/9 = 1.",
-          options: [
-            "A) y = ± (3/4)x",
-            "B) y = ± (4/3)x",
-            "C) y = ± (9/16)x",
-            "D) y = ± 12x"
-          ],
-          correctIndex: 0,
-          explanation: "For a horizontal hyperbola centered at the origin, the equations of the asymptotes are y = ± (b/a)x. Here, a = 4 and b = 3, so y = ± (3/4)x."
-        },
-        {
-          question: "Which expression is Trigonometrically equivalent to the identity cos²(x) - sin²(x)?",
-          options: [
-            "A) cos(2x)",
-            "B) sin(2x)",
-            "C) 1",
-            "D) 2 cos(x)"
-          ],
-          correctIndex: 0,
-          explanation: "By double-angle trigonometric identities, the expression cos²(x) - sin²(x) is the fundamental expansion of cos(2x)."
-        }
-      ],
-      SCIENCE: [
-        {
-          question: "What is the exact mass percentage of Oxygen inside a pure water molecule (H₂O)? (Molar Masses: H = 1.01 g/mol, O = 16.00 g/mol)",
-          options: [
-            "A) 88.8%",
-            "B) 11.2%",
-            "C) 50.0%",
-            "D) 94.1%"
-          ],
-          correctIndex: 0,
-          explanation: "The molar mass of water is 2(1.01) + 16.00 = 18.02 g/mol. Oxygen percentage = (16.00 / 18.02) * 100% = 88.8%."
-        },
-        {
-          question: "Which subatomic atom particle determines the chemical identity of an element (matching its unique atomic number)?",
-          options: [
-            "A) Proton",
-            "B) Neutron",
-            "C) Electron",
-            "D) Positron"
-          ],
-          correctIndex: 0,
-          explanation: "The proton count is the atomic number and acts as the unique signature for each element on the periodic table."
-        },
-        {
-          question: "What is the expression for the reaction quotient (Q_c) for: N₂ (g) + 3H₂ (g) <==> 2NH₃ (g)?",
-          options: [
-            "A) Q_c = [NH₃]² / ([N₂] * [H₂]³)",
-            "B) Q_c = ([N₂] * [H₂]³) / [NH₃]²",
-            "C) Q_c = [NH₃] / ([N₂] * [H₂])",
-            "D) Q_c = [NH₃]² / ([N₂] + 3[H₂])"
-          ],
-          correctIndex: 0,
-          explanation: "The reaction quotient evaluates as the product molarities raised to their coefficients divided by reactant molarities raised to theirs, so [NH₃]² / ([N₂] * [H₂]³)."
-        },
-        {
-          question: "An object of mass 10 kg undergoes constant acceleration of 4 m/s². What net Force is acting on it?",
-          options: [
-            "A) 40 N",
-            "B) 2.5 N",
-            "C) 25 N",
-            "D) 14 N"
-          ],
-          correctIndex: 0,
-          explanation: "By Newton's Second Law: Force = Mass * Acceleration (F = m * a). Here F = 10 kg * 4 m/s² = 40 Newtons."
-        },
-        {
-          question: "What is the molecular geometry of Carbon Dioxide (CO₂) based on VSEPR theory?",
-          options: [
-            "A) Linear",
-            "B) Bent",
-            "C) Trigonal Planar",
-            "D) Tetrahedral"
-          ],
-          correctIndex: 0,
-          explanation: "CO₂ features two double bonds and zero lone pairs on the central carbon, yielding a symmetric linear geometry of 180 degrees."
-        },
-        {
-          question: "Name the metabolic pathway that oxidizes one glucose molecule into two pyruvatemolecules with a net production of 2 ATP and 2 NADH.",
-          options: [
-            "A) Glycolysis",
-            "B) Krebs Cycle",
-            "C) Electron Transport Chain",
-            "D) Calvin Cycle"
-          ],
-          correctIndex: 0,
-          explanation: "Glycolysis comprises the cytoplasm reactions converting glucose into Pyruvate to prepare substrates for aerobic mitochondria pathways."
-        },
-        {
-          question: "Which intermolecular force is strongest in liquid water?",
-          options: [
-            "A) Hydrogen Bonding",
-            "B) Dipole-Dipole Interaction",
-            "C) London Dispersion Forces",
-            "D) Covalent Bonding"
-          ],
-          correctIndex: 0,
-          explanation: "While covalent bonds are intramolecular, hydrogen bonding is the strongest intermolecular attractive force holding water molecules together in the liquid phase."
-        },
-        {
-          question: "Determine the oxidation state of the Sulfur atom in the sulfate polyatomic ion (SO₄²⁻).",
-          options: [
-            "A) +6",
-            "B) +4",
-            "C) -2",
-            "D) +8"
-          ],
-          correctIndex: 0,
-          explanation: "Oxygen has an oxidation state of -2. For SO₄²⁻, let S be the oxidation number: S + 4(-2) = -2 => S - 8 = -2 => S = +6."
-        },
-        {
-          question: "According to Le Chatelier’s principle, what is the effect of raising the temperature of an exothermic system in chemical equilibrium?",
-          options: [
-            "A) Equilibrium shifts left to favor the reactants",
-            "B) Equilibrium shifts right to favor the products",
-            "C) The equilibrium constant K increases",
-            "D) No shift occurs in either direction"
-          ],
-          correctIndex: 0,
-          explanation: "In an exothermic reaction, heat is a product. Adding heat causes the reaction to shift left to consume the excess energy, favoring reactants."
-        },
-        {
-          question: "Find the frequency of an electromagnetic wave with a wavelength of 6.0 x 10⁻⁷ m. (c = 3.0 x 10⁸ m/s)",
-          options: [
-            "A) 5.0 x 10¹⁴ Hz",
-            "B) 2.0 x 10¹⁵ Hz",
-            "C) 1.8 x 10² Hz",
-            "D) 5.0 x 10⁶ Hz"
-          ],
-          correctIndex: 0,
-          explanation: "Using the wave equation c = λ * ν, the frequency is ν = c / λ = (3.0 x 10⁸ m/s) / (6.0 x 10⁻⁷ m) = 5.0 x 10¹⁴ Hz."
-        }
-      ],
-      HISTORY: [
-        {
-          question: "What was a primary constitutional weakness of the Articles of Confederation in the initial US system of governance?",
-          options: [
-            "A) The federal government lacked the authority to levy and collect national taxes.",
-            "B) The executive branch held unchecked unilateral veto authority.",
-            "C) It banned states from issuing or circulating their own reserve currency.",
-            "D) It required a simple majority to enact constitutional revisions."
-          ],
-          correctIndex: 0,
-          explanation: "Under the Articles, Congress could only request funds from states, severely limiting the treasury and national defense budgets."
-        },
-        {
-          question: "Which foundational Charter signed in 1215 established the legal principle that the sovereign is subject to the rule of law?",
-          options: [
-            "A) Magna Carta",
-            "B) Treaty of Westphalia",
-            "C) Declaration of the Rights of Man",
-            "D) English Bill of Rights"
-          ],
-          correctIndex: 0,
-          explanation: "King John signed the Magna Carta, guaranteeing due process and establishing that the crown's authority was not absolute."
-        },
-        {
-          question: "What major geopolitical event directly prompted USA input and formal entry into World War II?",
-          options: [
-            "A) The surprise attack on Pearl Harbor",
-            "B) German submarine sinking of the Lusitania",
-            "C) Germany's tactical invasion of Poland",
-            "D) The signing of the Lend-Lease program"
-          ],
-          correctIndex: 0,
-          explanation: "Japan's surprise attack on Pearl Harbor on December 7, 1941, catalyzed Congress to declare war, ending American isolationism."
-        },
-        {
-          question: "Which English philosopher pioneered the concept of natural rights (life, liberty, and property) used in the Declaration of Independence?",
-          options: [
-            "A) John Locke",
-            "B) Thomas Hobbes",
-            "C) Jean-Jacques Rousseau",
-            "D) Baron de Montesquieu"
-          ],
-          correctIndex: 0,
-          explanation: "John Locke's Second Treatise of Government asserted that a government's sole legitimacy rests on protecting citizens' natural rights."
-        },
-        {
-          question: "What was the chief foreign policy objective of the Marshall Plan following World War II?",
-          options: [
-            "A) Rebuild European economies to defend against Soviet expansion",
-            "B) Form a permanent offensive defense pact along eastern state lines",
-            "C) Force rapid demilitarization of central European borders",
-            "D) Regulate maritime logistics throughout the Mediterranean"
-          ],
-          correctIndex: 0,
-          explanation: "The Marshall Plan stabilized Western European infrastructures, removing the desperate economic conditions that bred communist sentiment."
-        },
-        {
-          question: "Which Roman Emperor issued the Edict of Milan in 313 AD, legalizing Christian practice?",
-          options: [
-            "A) Constantine the Great",
-            "B) Augustus Caesar",
-            "C) Marcus Aurelius",
-            "D) Diocletian"
-          ],
-          correctIndex: 0,
-          explanation: "Constantine's Edict of Milan ended religious persecution of Christians, paving the way for Christianity to become the empire's state religion."
-        },
-        {
-          question: "In absolute terms, what resource-related crisis resulted in the rapid decline of the French monarchy in the late 1780s?",
-          options: [
-            "A) Runaway grain prices and acute bread shortages",
-            "B) Gold standard inflation inside metropolitan centers",
-            "C) Collapse of the colonial fur trade registry",
-            "D) Absolute loss of naval wood harvests"
-          ],
-          correctIndex: 0,
-          explanation: "Severe droughts and winter weather led to extreme bread price hikes, inciting massive rural and urban revolutionary mobs."
-        },
-        {
-          question: "What was the strategic objective of the Monroe Doctrine issued by the United States in the year 1823?",
-          options: [
-            "A) Stop European colonization or interference in the Americas",
-            "B) Annex territories of Central America directly",
-            "C) Establish regular joint military zones with Imperial Britain",
-            "D) Declare total control of Pacific ocean passages"
-          ],
-          correctIndex: 0,
-          explanation: "The doctrine declared that the US would view any European intervention in the Western Hemisphere as a hostile act."
-        },
-        {
-          question: "Which US constitutional amendment, ratified in 1920, guaranteed women the right to vote?",
-          options: [
-            "A) Nineteenth Amendment",
-            "B) Eighteenth Amendment",
-            "C) Fourteenth Amendment",
-            "D) Fifteenth Amendment"
-          ],
-          correctIndex: 0,
-          explanation: "The 19th amendment prohibited US citizens from being denied the right to vote on account of sex."
-        },
-        {
-          question: "What was a major result of the Peace of Westphalia signed in 1648?",
-          options: [
-            "A) Formulated the modern principle of territorial state sovereignty",
-            "B) United the states of Italy under a single monarchy",
-            "C) Banned the practice of Lutheranism across Europe",
-            "D) Instigated the Napoleonic code throughout Prussia"
-          ],
-          correctIndex: 0,
-          explanation: "The Peace of Westphalia ended the Thirty Years' War and recognized sovereign equality, creating the modern system of nation-states."
-        }
-      ],
-      LANGUAGE: [
-        {
-          question: "In Spanish grammar, which verb mood represents desires, doubts, possibilities, or emotional judgments?",
-          options: [
-            "A) Substantive / Subjunctive (Subjuntivo)",
-            "B) Indicative (Indicativo)",
-            "C) Imperative (Imperativo)",
-            "D) Conditional (Condicional)"
-          ],
-          correctIndex: 0,
-          explanation: "The subjunctive mood describes subjective feelings, uncertainties, and hypothetical outcomes unlike concrete reality."
-        },
-        {
-          question: "Which Latin syntax case relates to the direct object of a sentence?",
-          options: [
-            "A) Accusative",
-            "B) Nominative",
-            "C) Genitive",
-            "D) Ablative"
-          ],
-          correctIndex: 0,
-          explanation: "In Latin, the direct object of active finite verbs appears inflected in the Accusative case."
-        },
-        {
-          question: "What Spanish verb is used for physical descriptions, careers, origins, and core unchanging identities?",
-          options: [
-            "A) Ser",
-            "B) Estar",
-            "C) Haber",
-            "D) Hacer"
-          ],
-          correctIndex: 0,
-          explanation: "Spanish differentiates 'state/location' (Estar) from 'long-term identity/characteristic' (Ser)."
-        },
-        {
-          question: "In French verb conjugation, what is the helper verb (auxiliaire) used for the past tense of transition verbs like 'aller', 'venir', and 'partir'?",
-          options: [
-            "A) Être",
-            "B) Avoir",
-            "C) Aller",
-            "D) Faire"
-          ],
-          correctIndex: 0,
-          explanation: "Motion-related verbs (DR & MRS VANDERTRAMP) use 'être' as their auxiliary verb inside passé composé."
-        },
-        {
-          question: "What is the correct Spanish conjugation of 'decir' in the first-person singular preterite (past tense)?",
-          options: [
-            "A) Dije",
-            "B) Decí",
-            "C) Diré",
-            "D) Digo"
-          ],
-          correctIndex: 0,
-          explanation: "'Decir' has an irregular preterite stem, conjugating with a strong 'j' as 'dije'."
-        }
-      ],
-      ENGLISH: [
-        {
-          question: "Identify the critical rhetorical appeal that relies on establishing the speaker's credibility, character, and expertise.",
-          options: [
-            "A) Ethos",
-            "B) Pathos",
-            "C) Logos",
-            "D) Kairos"
-          ],
-          correctIndex: 0,
-          explanation: "Ethos relies directly on establishing credibility and professional character, making the orator a trusted authority."
-        },
-        {
-          question: "What does the classical literary term 'Dramatic Irony' represent in a narrative play or novel?",
-          options: [
-            "A) When the audience/reader knows vital plot information that the characters are unaware of",
-            "B) When a character expresses the exact physical opposite of their actual feelings",
-            "C) When the plot reaches a highly atmospheric, tragic climax with visual weather cue elements",
-            "D) When a stage tragedy concludes with an unexpected comical resolution"
-          ],
-          correctIndex: 0,
-          explanation: "Dramatic Irony occurs when readers are aware of critical narrative parameters (e.g. Juliet is merely asleep) while characters remain in panic."
-        },
-        {
-          question: "Which of the following sentences is fully free of comma splices or structural grammar run-ons?",
-          options: [
-            "A) The gradebook updated at midnight; my aggregate grade stood at an 89.4%.",
-            "B) I reviewed the practice exam, the concepts clicked immediately.",
-            "C) The final exam was notoriously brutal, I hope standard deviation rounds it up.",
-            "D) Practicing active recall has revolutionized my habits, it guarantees passing results."
-          ],
-          correctIndex: 0,
-          explanation: "A semicolon or coordinating conjunction is required to fuse two independent clauses. Combining them with only a comma is a comma splice, a major point casualty!"
-        },
-        {
-          question: "In classical tragic plot structures, what is the definition of 'Hamartia'?",
-          options: [
-            "A) The fatal flaw or error in judgment that leads to the tragic downfall of a hero.",
-            "B) The final resolution and emotional purging of pity and fear (catharsis).",
-            "C) An unexpected, sudden reversal of fortune or circumstances.",
-            "D) The excessive pride or arrogance that challenges divine authority."
-          ],
-          correctIndex: 0,
-          explanation: "Hamartia refers specifically to a tragic hero's fatal flaw (e.g. Macbeth's ambition) which drives their eventual structural collapse."
-        },
-        {
-          question: "Identify the figure of speech represented in: 'The old grandfather clock groaned softly in the quiet hallway.'",
-          options: [
-            "A) Personification",
-            "B) Synecdoche",
-            "C) Metonymy",
-            "D) Hyperbole"
-          ],
-          correctIndex: 0,
-          explanation: "Giving human qualities, such as 'groaning softly', to an inanimate object like a clock is classical personification."
-        }
-      ],
-      ARTS: [
-        {
-          question: "What three critical physical factors constitute the photography Exposure Triangle?",
-          options: [
-            "A) Aperture, Shutter Speed, and ISO Sensitivity",
-            "B) Focal Length, Sensor Format, and Dynamic Range",
-            "C) White Balance, Color Hue, and Value Density",
-            "D) Rule of Thirds, Golden Ratio, and Leading Focus Lines"
-          ],
-          correctIndex: 0,
-          explanation: "The Exposure Triangle is the foundational pillar of manual camera exposure physics, balancing Aperture (f-stop wide), Shutter Speed (time wide), and ISO (gain sensitivity)."
-        },
-        {
-          question: "Under standard digital camera mechanics, which aperture f-stop value generates the shallowest depth of field (maximum background blur)?",
-          options: [
-            "A) f/1.8",
-            "B) f/8.0",
-            "C) f/16.0",
-            "D) f/22.0"
-          ],
-          correctIndex: 0,
-          explanation: "A wide open aperture (indicated by a small f-number like f/1.8) limits the depth of the in-focus plane, creating creamy background bokeh."
-        },
-        {
-          question: "If you are shooting fast-moving action in sports or wildlife, which shutter speed setting is optimal to freeze motion cleanly?",
-          options: [
-            "A) 1/1000 of a second",
-            "B) 1/30 of a second",
-            "C) 1/2 of a second",
-            "D) 4.0 seconds"
-          ],
-          correctIndex: 0,
-          explanation: "Freezing fast motion requires a very short exposure interval. 1/1000s captures split-second states cleanly, whereas slow speeds introduce motion blur."
-        },
-        {
-          question: "In photographic and visual design composition, what does the core 'Rule of Thirds' state?",
-          options: [
-            "A) Aligning key visual features along a 3x3 imaginary grid's lines and intersections creates balance.",
-            "B) Keeping the subject strictly filling middle space representing one-third of the total width.",
-            "C) Shooting exactly three exposures of every frame to find the right contrast.",
-            "D) Positioning three distinct human figures across different focus depths."
-          ],
-          correctIndex: 0,
-          explanation: "The Rule of Thirds suggests placing focal points on grid lines or intersections to lead the eye naturally and avoid static dead-center compositions."
-        },
-        {
-          question: "What physical artifact is introduced to digital image frames when you abnormally increase your camera sensor's ISO setting to 6400 or higher?",
-          options: [
-            "A) High levels of digital noise and color grain throughout the shadows",
-            "B) Physical lengthening of the lens focal compression ratio",
-            "C) Immediate lock-up of the mechanical shutter leaves",
-            "D) Absolute collapse of the available depth of field"
-          ],
-          correctIndex: 0,
-          explanation: "ISO increases sensor gain. Amplifying low-light current signal also exaggerates random sensor noise, bringing noticeable color grain artifacts into the final print."
-        },
-        {
-          question: "Which classical lighting setup positions the primary light source at 45 degrees, creating a signature small triangle of light on the shadowed cheek?",
-          options: [
-            "A) Rembrandt Lighting",
-            "B) Butterfly Lighting",
-            "C) Split Profile Lighting",
-            "D) Rim Silhouette Lighting"
-          ],
-          correctIndex: 0,
-          explanation: "Named after European painter Rembrandt, this dramatic setup sculpts facial assets beautifully while illuminating a small skin patch under the shadowed eye."
-        },
-        {
-          question: "In standard photography optics, what is the primary consequence of using a longer focal length lens (e.g. zooming from 24mm to 200mm)?",
-          options: [
-            "A) Angle of view narrows, and physical background compression increases",
-            "B) Angle of view opens up, making wide environments fit easily",
-            "C) Light entry rates increase, boosting direct exposure speed",
-            "D) Lens distortion stretches the edges of the image dramatically"
-          ],
-          correctIndex: 0,
-          explanation: "Telephoto focal lengths (like 200mm) narrow the visual slice and compress distance perspective, making background features appear much larger and closer to the foreground."
-        }
-      ],
-      ELECTIVES: [
-        {
-          question: "What is the worst-case runtime time complexity, in Big O notation, of locating a target item inside a sorted array of size n using Binary Search?",
-          options: [
-            "A) O(log n)",
-            "B) O(n)",
-            "C) O(n log n)",
-            "D) O(1)"
-          ],
-          correctIndex: 0,
-          explanation: "Since Binary Search recursively cuts the remaining search window in half, it requires at most log₂ n steps, completing O(log n) calculations! Pure efficiency."
-        },
-        {
-          question: "In structural programming languages like Java or C++, what system error occurs when a recursive function executes indefinitely without checking a base case?",
-          options: [
-            "A) Stack Overflow Error",
-            "B) Heap Out of Memory Exception",
-            "C) Arithmetic Division by Zero Error",
-            "D) Concurrent Modification Exception"
-          ],
-          correctIndex: 0,
-          explanation: "Each nested subroutine call instantiates a memory frame on the thread's execution stack. Unbounded recursion exhausts stack memory limits, causing a Stack Overflow crash!"
-        },
-        {
-          question: "Which foundational computer data structure manages elements using a 'First-In, First-Out' (FIFO) transaction queue?",
-          options: [
-            "A) Queue",
-            "B) Stack (LIFO)",
-            "C) Binary Sort Tree",
-            "D) Hash Map Dictionary"
-          ],
-          correctIndex: 0,
-          explanation: "A Queue works like a real-world checkout line: the first object entering the queue is the first object processed and removed (FIFO)."
-        },
-        {
-          question: "What is the primary function of a database 'Primary Key' constraint?",
-          options: [
-            "A) Uniquely identifying every individual record/row inside a database table",
-            "B) Formatting table characters into compressed, searchable index files",
-            "C) Establishing a direct join relationship to another secure admin table",
-            "D) Restricting access write privileges to verified user profiles"
-          ],
-          correctIndex: 0,
-          explanation: "A Primary Key enforces strict uniqueness regulations, preventing multiple rows from sharing duplicate identifiers."
-        }
-      ],
-      GENERAL: [
-        {
-          question: "What process describes the systematic formulation, testing, and modification of structural scientific models?",
-          options: [
-            "A) Scientific Method",
-            "B) Dialectical Logic",
-            "C) Cognitive Dissonance Analysis",
-            "D) Heuristic Evaluation"
-          ],
-          correctIndex: 0,
-          explanation: "The scientific method iterates hypothesis creation, objective empirical testing, and refinement of model frameworks."
-        },
-        {
-          question: "What error occurs when a researcher misinterprets a relative correlation as a clear causal mechanism?",
-          options: [
-            "A) Post hoc / Correlation-causation fallacy",
-            "B) Strawman bias",
-            "C) Circular logic",
-            "D) Confirmation fallacy"
-          ],
-          correctIndex: 0,
-          explanation: "Correlation measures simple associative pattern trends; a causal mechanism requires proving a direct variable-to-variable vector."
-        },
-        {
-          question: "What does a double-blind trial prevent in empirical scientific tests?",
-          options: [
-            "A) Investigator and subject bias",
-            "B) Outlier hardware data drops",
-            "C) High standard deviation in math calculations",
-            "D) Loss of sample size"
-          ],
-          correctIndex: 0,
-          explanation: "Keeping both investigator and subject unaware of treatment distribution ensures total objective analysis without conscious or unconscious placebo effects."
-        }
-      ]
-    };
-
-    const templates = academicPools[deducedDept] || academicPools.GENERAL;
-
-    // If we have a substantial number of questions already, just return them.
-    // This preserves the pristine quality of Gemini-generated customized questions without injecting unrelated items or repeats.
-    if (originalQuestions.length >= 10) {
-      return originalQuestions;
-    }
-
-    // For very small fallback lists (offline presets), pad with unique academic templates, checking for exact duplicates
-    for (const template of templates) {
-      if (originalQuestions.length >= 25) {
-        break;
-      }
-
-      const isDuplicate = originalQuestions.some(
-        (q) => q.question.toLowerCase() === template.question.toLowerCase()
-      );
-
-      if (!isDuplicate) {
-        originalQuestions.push({
-          question: template.question,
-          options: [...template.options],
-          correctIndex: template.correctIndex,
-          explanation: template.explanation
-        });
-      }
-    }
-
-    return originalQuestions;
-  }, [deck.quiz, deck.courseCode, deck.courseName]);
+    return [...(deck.quiz || [])];
+  }, [deck.quiz]);
 
   // Flashcards state
   const [currentCardIndex, setCurrentCardIndex] = useState(0);
@@ -715,6 +46,7 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
   // Interactive Matching Mode states
   const [currentSectionIndex, setCurrentSectionIndex] = useState(0);
   const [matchingAnswers, setMatchingAnswers] = useState<{ [qIdx: number]: string }>({});
+  const [matchedCardUids, setMatchedCardUids] = useState<{ [qIdx: number]: string }>({});
   const [focusedRowIdx, setFocusedRowIdx] = useState<number | null>(null);
   const [matchingSearchQuery, setMatchingSearchQuery] = useState("");
   const [wrongAttemptAnswer, setWrongAttemptAnswer] = useState<string | null>(null);
@@ -722,6 +54,26 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
   // States for AI questions generation
   const [isGeneratingMore, setIsGeneratingMore] = useState(false);
   const [generatorError, setGeneratorError] = useState<string | null>(null);
+
+  // Reset per-deck UI state when switching to a newly generated or saved deck
+  React.useEffect(() => {
+    setCurrentCardIndex(0);
+    setIsFlipped(false);
+    setMasteredCards([]);
+    setQuizAnswers({});
+    setSubmittedQuiz(false);
+    setQuizScore(0);
+    setEliminatedOptions({});
+    setCrowdPollResult({});
+    setViewedQuestionIndex(0);
+    setCurrentSectionIndex(0);
+    setMatchingAnswers({});
+    setMatchedCardUids({});
+    setFocusedRowIdx(null);
+    setMatchingSearchQuery("");
+    setWrongAttemptAnswer(null);
+    setGeneratorError(null);
+  }, [deck.id]);
 
   // States for PDF Export
   const [showPdfModal, setShowPdfModal] = useState(false);
@@ -752,8 +104,9 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
     setIsGeneratingMore(true);
     setGeneratorError(null);
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 45_000);
+    const timeoutId = setTimeout(() => controller.abort(), 80_000);
     try {
+      const courseMeta = deduceCourse(deck.courseCode || "");
       const response = await fetch("/api/generate-more-questions", {
         method: "POST",
         headers: {
@@ -762,20 +115,29 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
         body: JSON.stringify({
           courseCode: deck.courseCode,
           courseName: deck.courseName,
-          department: deduceCourse(deck.courseCode || "").department,
-          units: deck.units && deck.units.length > 0 ? deck.units : deduceCourse(deck.courseCode || "").units,
+          department: courseMeta.department,
+          curriculumDetails: courseMeta.curriculumDetails,
+          examFocus: courseMeta.examFocus,
+          units: deck.units && deck.units.length > 0 ? deck.units : courseMeta.units,
           existingQuestions: deck.quiz || [],
         }),
         signal: controller.signal,
       });
 
       if (!response.ok) {
-        throw new Error("Question generator server responded with an error.");
+        let errMessage = "Live AI question generator returned an error.";
+        try {
+          const errData = await response.json();
+          if (errData?.error) errMessage = errData.error;
+        } catch {
+          // ignore non-JSON body
+        }
+        throw new Error(errMessage);
       }
 
       const data = await response.json();
       if (!data.quiz || !Array.isArray(data.quiz) || data.quiz.length === 0) {
-        throw new Error("No additional questions were generated.");
+        throw new Error("No additional questions were generated by live AI.");
       }
 
       const updatedQuiz = [...(deck.quiz || []), ...data.quiz];
@@ -793,6 +155,7 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
       const newSectionIndex = Math.floor(startOfNewQuestions / 10);
       
       setMatchingAnswers({});
+      setMatchedCardUids({});
       setQuizAnswers({});
       setCurrentSectionIndex(newSectionIndex);
       setFocusedRowIdx(startOfNewQuestions);
@@ -805,9 +168,9 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
     } catch (err: any) {
       console.error("More questions error:", err);
       if (err?.name === "AbortError") {
-        setGeneratorError("Request timed out while generating more questions. Please try again.");
+        setGeneratorError("Live AI timed out while generating 25 more questions. Please try again.");
       } else {
-        setGeneratorError(err.message || "Failed to generate additional questions. Please try again.");
+        setGeneratorError(err.message || "Failed to generate additional live AI questions. Please try again.");
       }
     } finally {
       clearTimeout(timeoutId);
@@ -863,6 +226,7 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
   const resetQuiz = () => {
     setQuizAnswers({});
     setMatchingAnswers({});
+    setMatchedCardUids({});
     setFocusedRowIdx(null);
     setCurrentSectionIndex(0);
     setMatchingSearchQuery("");
@@ -954,45 +318,68 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
     setLifelines(prev => ({ ...prev, classPoll: prev.classPoll - 1 }));
   };
 
-  // Custom Matching Helper Methods
-  const placeMatchingAnswer = (qIdx: number, answerText: string) => {
+  // Custom Matching Helper Methods (strict 1-to-1 per-card UID identity)
+  const placeMatchingAnswer = (qIdx: number, answerText: string, cardUid?: string) => {
     if (submittedQuiz) return;
-    const updated = { ...matchingAnswers };
-    // Maintain 1-to-1 matching: if this answer was already matched to a different question, remove it first
-    for (const key in updated) {
-      if (updated[key] === answerText) {
-        delete updated[Number(key)];
+    const updatedAnswers = { ...matchingAnswers };
+    const updatedUids = { ...matchedCardUids };
+
+    if (cardUid) {
+      // Remove cardUid if previously assigned to another row
+      for (const key in updatedUids) {
+        if (updatedUids[key] === cardUid) {
+          const oldRow = Number(key);
+          delete updatedUids[oldRow];
+          delete updatedAnswers[oldRow];
+        }
+      }
+      updatedUids[qIdx] = cardUid;
+    } else {
+      for (const key in updatedAnswers) {
+        if (updatedAnswers[key] === answerText) {
+          const oldRow = Number(key);
+          delete updatedAnswers[oldRow];
+          delete updatedUids[oldRow];
+        }
       }
     }
-    updated[qIdx] = answerText;
-    setMatchingAnswers(updated);
+
+    updatedAnswers[qIdx] = answerText;
+    setMatchingAnswers(updatedAnswers);
+    setMatchedCardUids(updatedUids);
   };
 
   const clearMatchingAnswer = (qIdx: number) => {
     if (submittedQuiz) return;
-    const updated = { ...matchingAnswers };
-    delete updated[qIdx];
-    setMatchingAnswers(updated);
+    const updatedAnswers = { ...matchingAnswers };
+    const updatedUids = { ...matchedCardUids };
+    delete updatedAnswers[qIdx];
+    delete updatedUids[qIdx];
+    setMatchingAnswers(updatedAnswers);
+    setMatchedCardUids(updatedUids);
   };
 
-  const findMatchedRowForAnswer = (answerText: string) => {
+  const findMatchedRowForCard = (cardUid: string, answerText: string) => {
     const startIdx = currentSectionIndex * 10;
     const endIdx = Math.min((currentSectionIndex + 1) * 10, organizedQuiz.length);
     for (let i = startIdx; i < endIdx; i++) {
-      if (matchingAnswers[i] === answerText) {
-        return i; // Absolute row index
+      if (matchedCardUids[i] === cardUid) {
+        return i;
+      }
+      if (!matchedCardUids[i] && matchingAnswers[i] === answerText) {
+        return i;
       }
     }
     return null;
   };
 
-  const handleSelectCard = (answerText: string) => {
+  const handleSelectCard = (card: { uid: string; qIdx: number; text: string }) => {
+    const answerText = card.text;
     let targetIdx = focusedRowIdx;
     const startIdx = currentSectionIndex * 10;
     const endIdx = Math.min((currentSectionIndex + 1) * 10, organizedQuiz.length);
     
     if (targetIdx === null) {
-      // Find the first unmatched row in the current section
       for (let i = startIdx; i < endIdx; i++) {
         if (!matchingAnswers[i]) {
           targetIdx = i;
@@ -1005,18 +392,15 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
       targetIdx = startIdx;
     }
     
-    // Immediate verification check
     const activeQuestion = organizedQuiz[targetIdx];
     if (!activeQuestion) return;
     const correctAnsText = activeQuestion.options[activeQuestion.correctIndex];
     
     if (answerText === correctAnsText) {
-      // CORRECT MATCH
       setWrongAttemptAnswer(null);
-      placeMatchingAnswer(targetIdx, answerText);
-      setMatchingSearchQuery(""); // Auto clear search query after successful snap
+      placeMatchingAnswer(targetIdx, answerText, card.uid);
+      setMatchingSearchQuery("");
       
-      // Find absolute next empty index in the current 10-item section
       let nextEmptyIdx = null;
       for (let i = targetIdx + 1; i < endIdx; i++) {
         if (!matchingAnswers[i]) {
@@ -1036,7 +420,6 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
       if (nextEmptyIdx !== null) {
         setFocusedRowIdx(nextEmptyIdx);
       } else {
-        // All matched in this section! Auto-advance to the next section if available
         if (currentSectionIndex < Math.ceil(organizedQuiz.length / 10) - 1) {
           const nextSecIdx = currentSectionIndex + 1;
           setCurrentSectionIndex(nextSecIdx);
@@ -1052,12 +435,10 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
           }
           setFocusedRowIdx(targetForNext);
         } else {
-          // Keep focused at the current row
           setFocusedRowIdx(targetIdx);
         }
       }
     } else {
-      // INCORRECT MATCH - DO NOT MOVE ON. User must get it correct first!
       setWrongAttemptAnswer(answerText);
     }
   };
@@ -1065,14 +446,18 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
   const scrambledSectionOptions = React.useMemo(() => {
     const startIdx = currentSectionIndex * 10;
     const endIdx = Math.min((currentSectionIndex + 1) * 10, organizedQuiz.length);
-    const correctOptions: string[] = [];
+    const correctCards: Array<{ uid: string; qIdx: number; text: string }> = [];
     for (let i = startIdx; i < endIdx; i++) {
-      if (organizedQuiz[i]) {
-        correctOptions.push(organizedQuiz[i].options[organizedQuiz[i].correctIndex]);
+      const q = organizedQuiz[i];
+      if (q) {
+        correctCards.push({
+          uid: `opt-${i}`,
+          qIdx: i,
+          text: q.options[q.correctIndex],
+        });
       }
     }
-    // Sorting reverse alphabetically keeps option elements shuffled relative to original question indices and highly stable
-    return [...correctOptions].sort((a, b) => b.localeCompare(a));
+    return [...correctCards].sort((a, b) => b.text.localeCompare(a.text) || a.qIdx - b.qIdx);
   }, [currentSectionIndex, organizedQuiz]);
 
   const useAutoSolveMatching = (qIdx: number) => {
@@ -1080,7 +465,7 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
     const q = organizedQuiz[qIdx];
     if (!q) return;
     const correctAnsText = q.options[q.correctIndex];
-    placeMatchingAnswer(qIdx, correctAnsText);
+    placeMatchingAnswer(qIdx, correctAnsText, `opt-${qIdx}`);
     setLifelines(prev => ({ ...prev, autoSolve: prev.autoSolve - 1 }));
   };
 
@@ -1088,19 +473,21 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
     if (lifelines.fiftyFifty <= 0 || submittedQuiz) return;
     const q = organizedQuiz[qIdx];
     if (!q) return;
+    const correctAnsText = q.options[q.correctIndex];
     
-    // Find incorrect options in the active matching section
     const startIdx = currentSectionIndex * 10;
     const endIdx = Math.min((currentSectionIndex + 1) * 10, organizedQuiz.length);
-    const incorrectAnswers: string[] = [];
+    const incorrectCards: string[] = [];
     for (let i = startIdx; i < endIdx; i++) {
       if (organizedQuiz[i] && i !== qIdx) {
-        incorrectAnswers.push(organizedQuiz[i].options[organizedQuiz[i].correctIndex]);
+        const candText = organizedQuiz[i].options[organizedQuiz[i].correctIndex];
+        if (candText !== correctAnsText) {
+          incorrectCards.push(`opt-${i}`);
+        }
       }
     }
     
-    // Scramble and select up to 2 wrong matches to eliminate / cross out
-    const eliminated = [...incorrectAnswers].sort(() => 0.5 - Math.random()).slice(0, 2);
+    const eliminated = [...incorrectCards].sort(() => 0.5 - Math.random()).slice(0, 2);
     setEliminatedOptions(prev => ({ ...prev, [qIdx]: eliminated as any }));
     setLifelines(prev => ({ ...prev, fiftyFifty: prev.fiftyFifty - 1 }));
   };
@@ -1117,32 +504,33 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
     if (!q) return;
     const correctAnsText = q.options[q.correctIndex];
     
-    // Distribute percentages among all matching answers in this 10-item section
     const startIdx = currentSectionIndex * 10;
     const endIdx = Math.min((currentSectionIndex + 1) * 10, organizedQuiz.length);
-    const sectionAnswers: string[] = [];
+    const sectionCards: Array<{ uid: string; text: string }> = [];
     for (let i = startIdx; i < endIdx; i++) {
       if (organizedQuiz[i]) {
-        sectionAnswers.push(organizedQuiz[i].options[organizedQuiz[i].correctIndex]);
+        sectionCards.push({
+          uid: `opt-${i}`,
+          text: organizedQuiz[i].options[organizedQuiz[i].correctIndex],
+        });
       }
     }
 
-    const pollResult: { [optText: string]: number } = {};
+    const pollResult: { [uid: string]: number } = {};
     let remaining = 100;
     
-    // Correct gets a major vote
-    const correctPercent = Math.floor(Math.random() * 20) + 65; // 65% to 85%
-    pollResult[correctAnsText] = correctPercent;
+    const correctPercent = Math.floor(Math.random() * 20) + 65;
+    pollResult[`opt-${qIdx}`] = correctPercent;
     remaining -= correctPercent;
 
-    const remainingChoices = sectionAnswers.filter(ans => ans !== correctAnsText);
-    remainingChoices.forEach((ans, idx) => {
+    const remainingChoices = sectionCards.filter(c => c.uid !== `opt-${qIdx}` && c.text !== correctAnsText);
+    remainingChoices.forEach((c, idx) => {
       const isLast = idx === remainingChoices.length - 1;
       if (isLast) {
-        pollResult[ans] = remaining;
+        pollResult[c.uid] = remaining;
       } else {
         const pct = Math.floor(Math.random() * (remaining / 1.5));
-        pollResult[ans] = pct;
+        pollResult[c.uid] = pct;
         remaining -= pct;
       }
     });
@@ -1213,21 +601,35 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
       return p1.split('').map((char: string) => subs[char.toLowerCase()] || char).join('');
     });
 
-    // 4. Resolve direct subscripts e.g. H_2_O -> H₂O
-    cleaned = cleaned.replace(/_([0-9oaxypi\+\-])/gi, (match, p1) => {
+    // Protect uppercase snake_case course codes and identifiers (e.g. MATH_PRECALC, SCI_CHEM_H)
+    const protectedTokens: string[] = [];
+    cleaned = cleaned.replace(/\b[A-Z0-9]+(?:_[A-Z0-9]+)+\b/g, (match) => {
+      const idx = protectedTokens.push(match) - 1;
+      return `@@CODE${idx}@@`;
+    });
+
+    // 4. Resolve direct math/chemistry subscripts e.g. H_2O -> H₂O, x_1 -> x₁, v_x -> vₓ
+    cleaned = cleaned.replace(/_([0-9\+\-])(?![A-Z])/g, (match, p1) => {
       const subs: Record<string, string> = {
         '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
         '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
-        'a': 'ₐ', 'e': 'ₑ', 'o': 'ₒ', 'x': 'ₓ', 'y': 'ᵧ',
-        'p': 'ₚ', 'i': 'ᵢ', '+': '₊', '-': '₋'
+        '+': '₊', '-': '₋'
       };
-      return subs[p1.toLowerCase()] || `_${p1}`;
+      return subs[p1] || `_${p1}`;
+    });
+    cleaned = cleaned.replace(/(?<![A-Z]{2})_([oaxypi])(?![A-Za-z])/g, (match, p1) => {
+      const subs: Record<string, string> = {
+        'a': 'ₐ', 'o': 'ₒ', 'x': 'ₓ', 'y': 'ᵧ', 'p': 'ₚ', 'i': 'ᵢ'
+      };
+      return subs[p1] || `_${p1}`;
     });
 
     // Standard stats specific setups
     cleaned = cleaned.replace(/_\{?\\bar\{x\}\}?/gi, '₍x̅₎');
     cleaned = cleaned.replace(/_\{?\\hat\{p\}\}?/gi, '₍p̂₎');
-    cleaned = cleaned.replace(/_\{?([a-zA-Z0-9\xb5-\u221e]+)\}?/gi, '_$1');
+
+    // Restore protected uppercase snake_case identifiers
+    cleaned = cleaned.replace(/@@CODE(\d+)@@/g, (_, idx) => protectedTokens[Number(idx)] ?? '');
 
     // Greek symbols and statistics codes
     cleaned = cleaned.replace(/\\pm/gi, '±');
@@ -1706,7 +1108,7 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
               <div
                 id="interactive-flashcard"
                 onClick={() => setIsFlipped(!isFlipped)}
-                className={`h-64 w-full text-left p-6 rounded-2xl border flex flex-col justify-between cursor-pointer transition-all duration-200 select-none ${
+                className={`min-h-64 w-full text-left p-6 rounded-2xl border flex flex-col justify-between cursor-pointer transition-all duration-200 select-none ${
                   isFlipped
                     ? "border-amber-400 bg-amber-400 text-slate-950"
                     : "bg-gradient-to-br from-red-950/35 via-slate-950 to-blue-950/35 border-slate-700 hover:border-amber-500/60 text-white"
@@ -1729,7 +1131,7 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
 
                 <div className="grow flex items-center justify-center py-4">
                   {isFlipped ? (
-                    <p className="text-center px-4 text-slate-950 font-bold text-base md:text-lg leading-relaxed">
+                    <p className="text-center px-4 text-slate-950 font-bold text-sm md:text-base leading-relaxed">
                       {cleanMathFormula(flashcards[currentCardIndex]?.answer || "No answer available")}
                     </p>
                   ) : (
@@ -2244,9 +1646,9 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
 
                     <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
                       {(() => {
-                        const filteredOptions = scrambledSectionOptions.filter((opt) => {
+                        const filteredOptions = scrambledSectionOptions.filter((card) => {
                           if (!matchingSearchQuery.trim()) return true;
-                          return opt.toLowerCase().includes(matchingSearchQuery.toLowerCase());
+                          return card.text.toLowerCase().includes(matchingSearchQuery.toLowerCase());
                         });
 
                         if (filteredOptions.length === 0) {
@@ -2257,10 +1659,10 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
                           );
                         }
 
-                        return filteredOptions.map((opt, optIdx) => {
-                          const matchedRow = findMatchedRowForAnswer(opt);
+                        return filteredOptions.map((card) => {
+                          const matchedRow = findMatchedRowForCard(card.uid, card.text);
                           const isPlaced = matchedRow !== null;
-                          const isVaporized = eliminatedOptions[activeMatchingIdx]?.includes(opt as any);
+                          const isVaporized = eliminatedOptions[activeMatchingIdx]?.includes(card.uid as any);
 
                           let cardStyle = "bg-gradient-to-r from-red-950/30 via-slate-900 to-blue-950/30 border-slate-700 hover:border-amber-500/70";
                           let statusText = `Assign to Item ${activeMatchingIdx - currentSectionIndex * 10 + 1}`;
@@ -2275,14 +1677,14 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
                             cardStyle = "bg-gradient-to-r from-red-950/35 via-slate-900 to-blue-950/35 border-slate-700 hover:border-amber-500 cursor-pointer";
                           }
 
-                          const optParts = splitOptionIntoMatchingSections(opt);
+                          const optParts = splitOptionIntoMatchingSections(card.text);
 
                           return (
                             <button
-                              key={optIdx}
+                              key={card.uid}
                               type="button"
                               disabled={isVaporized || submittedQuiz}
-                              onClick={() => handleSelectCard(opt)}
+                              onClick={() => handleSelectCard(card)}
                               className={`w-full text-left rounded-xl p-3 border transition-colors flex flex-col gap-1.5 ${cardStyle}`}
                             >
                               <div className="flex flex-wrap items-baseline gap-1.5 font-semibold text-xs leading-snug">
@@ -2314,9 +1716,9 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
                                   {statusText}
                                 </span>
 
-                                {crowdPollResult[activeMatchingIdx] && crowdPollResult[activeMatchingIdx][opt] !== undefined && (
+                                {crowdPollResult[activeMatchingIdx] && crowdPollResult[activeMatchingIdx][card.uid as any] !== undefined && (
                                   <span className="text-amber-400 font-semibold tabular-nums">
-                                    Poll: {crowdPollResult[activeMatchingIdx][opt]}%
+                                    Poll: {crowdPollResult[activeMatchingIdx][card.uid as any]}%
                                   </span>
                                 )}
                               </div>
