@@ -67,7 +67,10 @@ ${pastedText ? `Reference notes:\n"""\n${pastedText}\n"""` : ""}`;
     }
     contents.push({ text: promptMessage });
 
-    const ai = new GoogleGenAI({ apiKey: key });
+const ai = new GoogleGenAI({
+  apiKey: key,
+  httpOptions: { apiVersion: "v1beta" },
+});
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents,
