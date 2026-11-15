@@ -1,4 +1,11 @@
-export const maxDuration = 60;
+export const config = {
+  maxDuration: 60,
+  api: {
+    bodyParser: {
+      sizeLimit: "50mb",
+    },
+  },
+};
 
 function parseGeminiJson(rawText: string) {
   let cleaned = rawText.trim();
@@ -8,18 +15,20 @@ function parseGeminiJson(rawText: string) {
   return JSON.parse(cleaned);
 }
 
-export async function POST(request: Request) {
+export default async function handler(req: any, res: any) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
   try {
     const rawKey = process.env.GEMINI_API_KEY;
     if (!rawKey) {
-      return Response.json(
-        { error: "GEMINI_API_KEY is missing in Vercel Environment Variables." },
-        { status: 500 }
-      );
+      return res.status(500).json({
+        error: "GEMINI_API_KEY is missing in Vercel Environment Variables.",
+      });
     }
     const key = rawKey.trim();
 
-    const body = await request.json();
     const {
       schoolName,
       courseCode,
@@ -32,10 +41,10 @@ export async function POST(request: Request) {
       additionalNotes,
       fileBase64,
       fileMimeType,
-    } = body || {};
+    } = req.body || {};
 
     if (!courseCode) {
-      return Response.json({ error: "courseCode is required." }, { status: 400 });
+      return res.status(400).json({ error: "courseCode is required." });
     }
 
     const activeSchool = schoolName || "D'Evelyn High School";
@@ -66,7 +75,7 @@ ${pastedText ? `Reference notes:\n"""\n${pastedText}\n"""` : ""}`;
     }
     parts.push({ text: promptMessage });
 
-    const requestBody = JSON.stringify({
+    const payload = JSON.stringify({
       systemInstruction: {
         parts: [{ text: systemPrompt }],
       },
@@ -139,44 +148,37 @@ ${pastedText ? `Reference notes:\n"""\n${pastedText}\n"""` : ""}`;
     let lastError: any = null;
 
     for (const model of models) {
-      try {
-        const endpoint = new URL(
-          `/v1beta/models/${model}:generateContent`,
-          "https://googleapis.com"
-        );
-        endpoint.searchParams.set("key", key);
+      const url = `https://googleapis.com{model}:generateContent?key=${encodeURIComponent(key)}`;
+      const geminiRes = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+      });
 
-        const geminiRes = await fetch(endpoint.toString(), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: requestBody,
-        });
+      const data = await geminiRes.json();
+      if (!geminiRes.ok) {
+        lastError = data;
+        continue;
+      }
 
-        const data = await geminiRes.json();
-        if (!geminiRes.ok) {
-          lastError = data;
-          continue;
-        }
+      const candidates = data && Array.isArray(data.candidates) ? data.candidates : [];
+      const firstCand = candidates.length > 0 ? candidates.at(0) : null;
+      const respParts =
+        firstCand && firstCand.content && Array.isArray(firstCand.content.parts)
+          ? firstCand.content.parts
+          : [];
+      const firstPart = respParts.length > 0 ? respParts.at(0) : null;
+      const replyText = firstPart ? firstPart.text : null;
 
-        const firstCandidate = Array.isArray(data?.candidates) ? data.candidates.at(0) : null;
-        const firstPart = Array.isArray(firstCandidate?.content?.parts)
-          ? firstCandidate.content.parts.at(0)
-          : null;
-        const replyText = firstPart?.text;
-
-        if (replyText) {
-          return Response.json(parseGeminiJson(replyText));
-        }
-      } catch (e: any) {
-        lastError = { error: e?.cause?.message || e?.message || "Network error" };
+      if (replyText) {
+        return res.status(200).json(parseGeminiJson(replyText));
       }
     }
 
-    return Response.json(lastError || { error: "Failed to reach Gemini API." }, { status: 500 });
+    return res.status(500).json(lastError || { error: "Gemini API did not return content." });
   } catch (error: any) {
-    return Response.json(
-      { error: error?.cause?.message || error?.message || "Server error" },
-      { status: 500 }
-    );
+    return res.status(500).json({
+      error: error?.message || "Unexpected server error",
+    });
   }
 }
