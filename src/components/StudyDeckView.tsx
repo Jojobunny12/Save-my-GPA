@@ -762,6 +762,8 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
         body: JSON.stringify({
           courseCode: deck.courseCode,
           courseName: deck.courseName,
+          department: deduceCourse(deck.courseCode || "").department,
+          units: deck.units && deck.units.length > 0 ? deck.units : deduceCourse(deck.courseCode || "").units,
           existingQuestions: deck.quiz || [],
         }),
         signal: controller.signal,
@@ -1595,6 +1597,36 @@ export default function StudyDeckView({ deck, onBack, onUpdateDeck }: StudyDeckV
                   {cleanMathFormula(deck.summary?.synthesizedNotesParagraph || "No notes synthesis available.")}
                 </p>
               </div>
+
+              {/* Course Units Covered */}
+              {(() => {
+                const coveredUnits = deck.units && deck.units.length > 0
+                  ? deck.units
+                  : deduceCourse(deck.courseCode || "").units;
+                if (!coveredUnits || coveredUnits.length === 0) return null;
+                return (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-display text-sm font-bold text-white">
+                        Syllabus Units Covered
+                      </h3>
+                      <span className="text-xs font-mono text-slate-400 tabular-nums">
+                        {coveredUnits.length} units
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 bg-slate-950/60 border border-slate-800 p-5 rounded-2xl">
+                      {coveredUnits.map((unit, idx) => (
+                        <div key={unit} className="flex items-start gap-2.5 text-xs text-slate-200 leading-relaxed">
+                          <span className="font-mono text-amber-400 font-semibold tabular-nums shrink-0">
+                            {String(idx + 1).padStart(2, "0")}.
+                          </span>
+                          <span>{unit}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Core Formula & Concept Cheat Sheet */}
               <div className="space-y-3 pt-4 border-t border-slate-800">

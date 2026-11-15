@@ -146,6 +146,7 @@ app.post("/api/analyze-finals-material", async (req, res) => {
       studyStrategy,
       pastedText,
       additionalNotes,
+      units,
       fileBase64,
       fileMimeType,
     } = req.body;
@@ -158,14 +159,18 @@ app.post("/api/analyze-finals-material", async (req, res) => {
     const ai = getGeminiClient();
     const activeSchool = schoolName || "D'Evelyn High School";
     const activeCourseName = courseName || `Course ${courseCode}`;
+    const unitsList: string[] = Array.isArray(units) ? units : [];
+    const formattedUnits = unitsList.length > 0
+      ? unitsList.map((u, idx) => `  ${idx + 1}. ${u}`).join("\n")
+      : "Deduce full unit sequence from official course syllabus";
 
     // Prepare contents array for Gemini
     const systemPrompt = `You are an expert Academic Coach specializing in rigorous high school and AP curriculums, with a clear, encouraging, and academically rigorous instruction style.
 This study platform helps students preparing for final exams at "${activeSchool}" based on their Course Code: "${courseCode}" (and course name if specified: "${activeCourseName}").
 
 No study notes or PDF files are required! Your goal is to:
-1. Deconstruct the Course Code "${courseCode}" to determine the level, subject, and department (e.g. "SCI_CHEM" -> Chemistry, "ENG09" -> Literature & Composition 9, "MATH_AP_CALC_AB" -> AP Calculus AB, etc.).
-2. Generate a complete, high-yield finals preparation study deck based on this subject's official academic syllabus.
+1. Deconstruct the Course Code "${courseCode}" to determine the level, subject, and department (e.g. "SCI_CHEM_H" -> Chemistry Honors, "ENG09" -> Literature & Composition 9, "MATH_AP_CALC_AB" -> AP Calculus AB, "10157H05012" -> AP Computer Science A).
+2. Generate a complete, high-yield finals preparation study deck covering EVERY listed course unit evenly across the cheat sheet, flashcards, 5-day timeline, and 25-question mock exam.
 
 CRITICAL FORMULA & MATH RENDERING GUIDELINES:
 - DO NOT USE RAW LATEX SYMBOLS OR MATH BLOCKS (such as \\frac{a}{b}, \\sqrt{x}, \\bar{x}, \\hat{p}, \\pm, or $$...$$ / $...$) in your output, as standard browsers cannot render them without complex compilation packages.
@@ -185,7 +190,8 @@ TONE & QUALITY GUIDELINES:
 - Maintain 100% textbook accuracy for all formulas, dates, proofs, code snippets, and explanations! Keep math unicode clean and LaTeX-free!
 
 CRITICAL QUIZ CONTENT REQUIREMENT:
-- EVERY single quiz question MUST be a real, high-value academic study question directly testing core facts, formulas, theorems, dates, grammar patterns, historical figures, code traces, or problems from this course curriculum.
+- EVERY single quiz question MUST be a real, high-value academic study question directly testing core facts, formulas, theorems, dates, grammar patterns, historical figures, code traces, or problems from the specified units of this course curriculum.
+- Distribute the 25 quiz questions cleanly across ALL target course units listed below so no unit is left untested.
 - Under NO circumstances generate filler questions about study habits or generic test-taking advice as the actual question. Every question must test real subject content.
 
 The Course metadata we compiled:
@@ -196,10 +202,12 @@ The Course metadata we compiled:
 - Typical Curriculum Focus: ${curriculumDetails || "Deduce from code standards"}
 - Typical Finals Exam Format: ${examFocus || "Traditional honors cumulative exam"}
 - Core Recommended Strategy: ${studyStrategy || "Deduce optimal approach"}
+- Target Curriculum Units to Cover:
+${formattedUnits}
 
 Student's Added Notes or Target Focus: ${additionalNotes || "None"}
 
-Please extract the core technical vocabulary, formulas, equations, texts, themes, key figures, or rules, and project how they will be tested on cumulative high school finals.
+Please extract the core technical vocabulary, formulas, equations, texts, themes, key figures, or rules across every listed unit, and project how they will be tested on cumulative high school finals.
 
 You must reply with a valid JSON object matching the exact structure requested, with no markdown code blocks surrounding it (return pure JSON text directly) with the following schema:
 {
@@ -353,6 +361,7 @@ ${pastedText}
         curriculumDetails: curriculumDetails,
         examFocus: examFocus,
         studyStrategy: studyStrategy,
+        units: unitsList,
       });
       res.json(fallbackDeck);
     }
@@ -365,6 +374,7 @@ ${pastedText}
       courseCode: targetCode,
       courseName: req.body?.courseName,
       department: req.body?.department,
+      units: Array.isArray(req.body?.units) ? req.body.units : [],
     });
     res.json(fallbackDeck);
   }
@@ -377,6 +387,7 @@ app.post("/api/generate-more-questions", async (req, res) => {
       courseCode,
       courseName,
       department,
+      units,
       existingQuestions,
     } = req.body;
 
@@ -386,10 +397,15 @@ app.post("/api/generate-more-questions", async (req, res) => {
     }
 
     const activeCourseName = courseName || `Course ${courseCode}`;
+    const unitsList: string[] = Array.isArray(units) ? units : [];
+    const unitsBlock = unitsList.length > 0
+      ? `\nTarget Course Units to Cover Evenly:\n${unitsList.map((u, idx) => `- ${idx + 1}. ${u}`).join("\n")}\n`
+      : "";
 
     const systemPrompt = `You are an expert Academic Coach specializing in rigorous high school and AP curriculums, with a clear, encouraging, and academically rigorous instruction style.
 
 Your goal is to generate 25 MORE completely custom, academically rigorous multiple-choice questions for Course Code: "${courseCode}" (official name: "${activeCourseName}").
+${unitsBlock}
 
 CRITICAL FORMULA & MATH RENDERING GUIDELINES:
 - DO NOT USE RAW LATEX SYMBOLS OR MATH BLOCKS (such as \\frac{a}{b}, \\sqrt{x}, \\bar{x}, \\hat{p}, \\pm, or $$...$$ / $...$) in your output.

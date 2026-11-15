@@ -122,12 +122,17 @@ export function generateOfflineHtml(savedDecks: StudyDeck[], activeDeck?: StudyD
       ];
     }
 
+    const unitsList = Array.isArray(course.units) && course.units.length > 0
+      ? `\n\n## Course Units Covered\n${course.units.map((u) => `* ${u}`).join("\n")}`
+      : "";
+
     return {
       id: `preset-${course.code}`,
       timestamp: new Date().toISOString(),
       schoolName: "D'Evelyn High School",
       courseCode: course.code,
       courseName: course.name,
+      units: course.units,
       summary: {
         title: `${course.name} Study Companion`,
         curriculumExplanation: course.description,
@@ -136,8 +141,8 @@ export function generateOfflineHtml(savedDecks: StudyDeck[], activeDeck?: StudyD
           `Space your review sessions across multiple days to maximize retention.`,
           `Focus heavily on: ${course.examFocus}`
         ],
-        synthesizedNotesParagraph: `${course.description} | ${course.curriculumDetails}. ${course.examFocus}`,
-        coreCheatSheetMarkdown: `# ${course.name} Core Review Sheet\n\n## Syllabi Guide\n${course.description}\n\n## Exam Focus\n${course.examFocus}\n\n## Recommendations\n* **Details:** ${course.curriculumDetails}\n* **Methods:** ${course.studyStrategy}`
+        synthesizedNotesParagraph: `${course.description} | ${course.curriculumDetails}. ${course.examFocus}${course.units?.length ? ` Units covered: ${course.units.join("; ")}.` : ""}`,
+        coreCheatSheetMarkdown: `# ${course.name} Core Review Sheet\n\n## Syllabi Guide\n${course.description}${unitsList}\n\n## Exam Focus\n${course.examFocus}\n\n## Recommendations\n* **Details:** ${course.curriculumDetails}\n* **Methods:** ${course.studyStrategy}`
       },
       timeline: [
         { dayName: "Day 1: Core Foundations", activityTitle: "Review syllabus & definitions", activityDescription: "Map out major concepts, core terminology, and key formulas for each unit." },

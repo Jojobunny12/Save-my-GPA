@@ -31,11 +31,12 @@ export function generateAcademicFallbackDeck(params: {
   curriculumDetails?: string;
   examFocus?: string;
   studyStrategy?: string;
+  units?: string[];
 }): FallbackDeckData {
-  const { schoolName = "D'Evelyn High School", courseCode, courseName = `Course ${courseCode}`, department = "General", curriculumDetails = "", examFocus = "", studyStrategy = "" } = params;
+  const { schoolName = "D'Evelyn High School", courseCode, courseName = `Course ${courseCode}`, department = "General", curriculumDetails = "", examFocus = "", studyStrategy = "", units = [] } = params;
 
   const title = `${courseName} (${courseCode}): Final Exam Study Deck`;
-  const curriculumExplanation = `This rigorous study companion is mapped directly to the official high school syllabus for ${courseName} at ${schoolName}. It synthesizes essential concepts, testable definitions, core formulas, and critical diagnostic patterns into a high-yield finals review system.`;
+  const curriculumExplanation = `This rigorous study companion is mapped directly to the official high school syllabus for ${courseName} at ${schoolName}${units.length > 0 ? ` across ${units.length} curriculum units` : ""}. It synthesizes essential concepts, testable definitions, core formulas, and critical diagnostic patterns into a high-yield finals review system.`;
 
   const topTipsForFinal = [
     `Double-check your notation and variable assignments before submitting—minor calculation slips cause 80% of preventable grade drops.`,
@@ -44,9 +45,13 @@ export function generateAcademicFallbackDeck(params: {
     `Review past homework errors and quiz corrections—teachers frequently repurpose modified versions of previous questions.`
   ];
 
-  const synthesizedNotesParagraph = `Mastering ${courseName} requires a dual approach: conceptual understanding and algorithmic execution. Key areas covered in this curriculum include: ${curriculumDetails || "fundamental core principles, problem-solving methodologies, structural analysis, and contextual applications"}. When preparing for the cumulative exam, ensure you can work backward from solutions, identify edge conditions, and articulate theoretical foundations without relying on notes.`;
+  const synthesizedNotesParagraph = `Mastering ${courseName} requires a dual approach: conceptual understanding and algorithmic execution. Key areas covered in this curriculum include: ${curriculumDetails || "fundamental core principles, problem-solving methodologies, structural analysis, and contextual applications"}${units.length > 0 ? ` (${units.join("; ")})` : ""}. When preparing for the cumulative exam, ensure you can work backward from solutions, identify edge conditions, and articulate theoretical foundations without relying on notes.`;
 
-  const coreCheatSheetMarkdown = `### Core Formula & Concept Quick-Reference: ${courseName}
+  const unitsMarkdownSection = units.length > 0
+    ? `\n\n#### Course Units Covered\n${units.map((u) => `- ${u}`).join("\n")}`
+    : "";
+
+  const coreCheatSheetMarkdown = `### Core Formula & Concept Quick-Reference: ${courseName}${unitsMarkdownSection}
 
 #### Key Principles & Definitions
 - **Fundamental Rule 1**: Always state initial assumptions and boundary conditions prior to solving.

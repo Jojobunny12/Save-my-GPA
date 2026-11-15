@@ -2,10 +2,13 @@ export interface Course {
   code: string;
   name: string;
   department: 'English' | 'Social Studies' | 'Foreign Language' | 'Mathematics' | 'Science' | 'Fine Arts' | 'Electives';
+  gradeLevel?: string;
+  credit?: string;
   description: string;
   curriculumDetails: string;
   examFocus: string;
   studyStrategy: string;
+  units: string[];
 }
 
 export interface StudySummary {
@@ -40,6 +43,7 @@ export interface StudyDeck {
   schoolName?: string;
   courseCode: string;
   courseName: string;
+  units?: string[];
   summary: StudySummary;
   timeline: TimelineDay[];
   flashcards: Flashcard[];
