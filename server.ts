@@ -31,12 +31,33 @@ function getGeminiClient(): GoogleGenAI | null {
   return aiClient;
 }
 
-const MODEL_PIPELINE: Array<{ model: string; thinkingLevel: ThinkingLevel; timeoutMs: number }> = [
-  { model: "gemini-4-hydrogen", thinkingLevel: ThinkingLevel.LOW, timeoutMs: 45_000 },
-  { model: "gemini-3.1-flash-lite", thinkingLevel: ThinkingLevel.MINIMAL, timeoutMs: 25_000 },
+interface ModelPipelineEntry {
+  model: string;
+  thinkingLevel: ThinkingLevel;
+  firstByteTimeoutMs: number;
+  stallTimeoutMs: number;
+  totalTimeoutMs: number;
+}
+
+const MODEL_PIPELINE: ModelPipelineEntry[] = [
+  {
+    model: "gemini-4-hydrogen",
+    thinkingLevel: ThinkingLevel.LOW,
+    firstByteTimeoutMs: 25_000,
+    stallTimeoutMs: 18_000,
+    totalTimeoutMs: 50_000,
+  },
+  {
+    model: "gemini-3.1-flash-lite",
+    thinkingLevel: ThinkingLevel.MINIMAL,
+    firstByteTimeoutMs: 22_000,
+    stallTimeoutMs: 16_000,
+    totalTimeoutMs: 38_000,
+  },
 ];
 
-const TOTAL_DEADLINE_MS = 72_000;
+// Overall server budget across retries/failover (safe with NDJSON keepalive streaming)
+const TOTAL_DEADLINE_MS = 85_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -56,6 +77,58 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
       }
     );
   });
+}
+
+async function collectStreamedText(
+  streamPromise: Promise<AsyncIterable<any>>,
+  budget: Pick<ModelPipelineEntry, "firstByteTimeoutMs" | "stallTimeoutMs" | "totalTimeoutMs">,
+  label: string,
+  onAccumulated?: (accumulatedText: string) => void
+): Promise<string> {
+  const overallDeadline = Date.now() + budget.totalTimeoutMs;
+  const stream = await withTimeout(
+    streamPromise,
+    Math.min(budget.firstByteTimeoutMs, budget.totalTimeoutMs),
+    `${label}:connect`
+  );
+  const iterator = stream[Symbol.asyncIterator]();
+  let fullText = "";
+  let gotFirstByte = false;
+
+  try {
+    while (true) {
+      const remaining = overallDeadline - Date.now();
+      if (remaining <= 0) {
+        const err: any = new Error(`TIMEOUT after ${budget.totalTimeoutMs}ms (${label})`);
+        err.status = 504;
+        throw err;
+      }
+
+      const stepWait = Math.min(
+        gotFirstByte ? budget.stallTimeoutMs : budget.firstByteTimeoutMs,
+        remaining
+      );
+      const nextResult = await withTimeout(
+        iterator.next(),
+        stepWait,
+        `${label}:${gotFirstByte ? "stall" : "first-byte"}`
+      );
+      if (nextResult.done) {
+        break;
+      }
+
+      const chunkText = typeof nextResult.value?.text === "string" ? nextResult.value.text : "";
+      if (chunkText) {
+        gotFirstByte = true;
+        fullText += chunkText;
+        onAccumulated?.(fullText);
+      }
+    }
+    return fullText;
+  } catch (err) {
+    await iterator.return?.().catch(() => {});
+    throw err;
+  }
 }
 
 function parseGeminiJson(rawText: string): any {
@@ -226,7 +299,12 @@ function extractErrorStatusAndMessage(err: any): { status: number; message: stri
 }
 
 async function executeGeminiWithRetry<T>(
-  callFn: (ai: GoogleGenAI, modelName: string, thinkingLevel: ThinkingLevel) => Promise<T>
+  callFn: (
+    ai: GoogleGenAI,
+    entry: ModelPipelineEntry,
+    attemptLabel: string
+  ) => Promise<T>,
+  onModelSwitch?: (msg: string) => void
 ): Promise<T> {
   const ai = getGeminiClient();
   if (!ai) {
@@ -236,27 +314,30 @@ async function executeGeminiWithRetry<T>(
   const startedAt = Date.now();
   let lastError: any = null;
 
-  for (const { model, thinkingLevel, timeoutMs: modelBudget } of MODEL_PIPELINE) {
+  for (let mIdx = 0; mIdx < MODEL_PIPELINE.length; mIdx++) {
+    const entry = MODEL_PIPELINE[mIdx];
     for (let attempt = 0; attempt < 2; attempt++) {
       const elapsed = Date.now() - startedAt;
       const remaining = TOTAL_DEADLINE_MS - elapsed;
-      if (remaining <= 3000) {
+      if (remaining <= 4000) {
         throw lastError || new Error("Gemini request exceeded total time budget.");
       }
 
-      const timeoutMs = Math.min(modelBudget, remaining);
+      const cappedEntry: ModelPipelineEntry = {
+        ...entry,
+        firstByteTimeoutMs: Math.min(entry.firstByteTimeoutMs, remaining),
+        stallTimeoutMs: Math.min(entry.stallTimeoutMs, remaining),
+        totalTimeoutMs: Math.min(entry.totalTimeoutMs, remaining),
+      };
+
       try {
-        return await withTimeout(
-          callFn(ai, model, thinkingLevel),
-          timeoutMs,
-          `${model}#${attempt + 1}`
-        );
+        return await callFn(ai, cappedEntry, `${entry.model}#${attempt + 1}`);
       } catch (err: any) {
         lastError = err;
         const msg = String(err?.message || "").toLowerCase();
         const code = Number(err?.status || err?.code || 0);
 
-        console.warn(`Gemini ${model} attempt ${attempt + 1} failed (${code || "ERR"}): ${err?.message}`);
+        console.warn(`Gemini ${entry.model} attempt ${attempt + 1} failed (${code || "ERR"}): ${err?.message}`);
 
         // Do not retry bad auth/model errors
         if (code === 400 || code === 403 || code === 404 || msg.includes("api_key_invalid") || msg.includes("permission_denied")) {
@@ -265,7 +346,9 @@ async function executeGeminiWithRetry<T>(
 
         const isTimeout = code === 504 || msg.includes("timeout");
         if (isTimeout) {
-          // Move straight to the faster backup model on timeout
+          if (mIdx < MODEL_PIPELINE.length - 1) {
+            onModelSwitch?.("Primary model slow — switching to fast live Gemini model...");
+          }
           break;
         }
 
@@ -283,12 +366,16 @@ async function executeGeminiWithRetry<T>(
           msg.includes("too few") ||
           msg.includes("json");
 
-        if (isTransient && attempt === 0) {
-          const backoffMs = Math.min(1200, Math.max(0, TOTAL_DEADLINE_MS - (Date.now() - startedAt) - 4000));
-          if (backoffMs > 150) {
+        const budgetAfter = TOTAL_DEADLINE_MS - (Date.now() - startedAt);
+        if (isTransient && attempt === 0 && budgetAfter > 22_000) {
+          const backoffMs = Math.min(900, Math.max(0, budgetAfter - 20_000));
+          if (backoffMs > 100) {
             await new Promise((resolve) => setTimeout(resolve, backoffMs));
           }
           continue;
+        }
+        if (mIdx < MODEL_PIPELINE.length - 1) {
+          onModelSwitch?.("Retrying with backup live Gemini model...");
         }
         break;
       }
@@ -298,8 +385,55 @@ async function executeGeminiWithRetry<T>(
   throw lastError || new Error("All live Gemini models failed to respond.");
 }
 
+function setupNdjsonStream(req: express.Request, res: express.Response) {
+  const wantsStream = String(req.headers.accept || "").includes("application/x-ndjson");
+  if (!wantsStream) {
+    return null;
+  }
+
+  res.status(200);
+  res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders?.();
+
+  let closed = false;
+  res.on("close", () => {
+    closed = true;
+    clearInterval(heartbeat);
+  });
+
+  const writeLine = (obj: Record<string, any>) => {
+    if (closed || res.writableEnded || res.destroyed) return;
+    res.write(JSON.stringify(obj) + "\n");
+  };
+
+  writeLine({ type: "progress", message: "Connected to live Gemini AI..." });
+
+  const heartbeat = setInterval(() => {
+    writeLine({ type: "ping" });
+  }, 2500);
+
+  return {
+    writeLine,
+    finishResult: (data: any) => {
+      clearInterval(heartbeat);
+      writeLine({ type: "result", data });
+      if (!res.writableEnded) res.end();
+    },
+    finishError: (status: number, message: string) => {
+      clearInterval(heartbeat);
+      writeLine({ type: "error", status, error: message });
+      if (!res.writableEnded) res.end();
+    },
+    cleanup: () => clearInterval(heartbeat),
+  };
+}
+
 // REST API endpoint to analyze study materials and generate a live AI D'Evelyn curriculum deck
 app.post("/api/analyze-finals-material", async (req, res) => {
+  const ndjson = setupNdjsonStream(req, res);
+
   try {
     const {
       schoolName,
@@ -317,7 +451,11 @@ app.post("/api/analyze-finals-material", async (req, res) => {
     } = req.body;
 
     if (!courseCode) {
-      res.status(400).json({ error: "courseCode is required." });
+      if (ndjson) {
+        ndjson.finishError(400, "courseCode is required.");
+      } else {
+        res.status(400).json({ error: "courseCode is required." });
+      }
       return;
     }
 
@@ -346,13 +484,13 @@ ${formattedUnits}
 FLASHCARD REQUIREMENTS (14 to 16 cards):
 - Do NOT write vague glossary definitions or generic study-habit advice.
 - Each flashcard MUST predict high-probability D'Evelyn exam items: exact non-calculator values, worked micro-problems, theorem hypotheses/conditions, common exam traps/extraneous root checks, primary-source arguments, syntax/grammar rules, or code-trace outputs.
-- Format answers with the crisp answer first followed by the exact formula, condition, or key pitfall to remember.
+- Keep each card concise: front question + crisp answer first followed by the key formula, condition, or pitfall.
 
 MOCK EXAM REQUIREMENTS (EXACTLY 25 questions):
 - Distribute the 25 questions evenly across ALL listed Target Curriculum Units.
 - Write authentic, challenging, textbook-accurate questions with realistic numbers, equations, historical arguments, literary excerpts, language conjugations, or code snippets.
 - MATCHING POOL UNIQUENESS CONSTRAINT: Questions are grouped into sets of 10 (Q1-Q10, Q11-Q20, Q21-Q25) where students match questions to correct answer cards. Within each set of 10 questions (1-10, 11-20, 21-25), ALL 10 correct answer choices MUST be completely distinct values/phrases (never allow two questions in the same 10-question set to have identical correct answer strings like both having "1", "0", or "True").
-- Provide 4 distinct options formatted strictly as ["A) ...", "B) ...", "C) ...", "D) ..."], with correctIndex in 0..3 and a crisp 1-2 sentence step-by-step explanation.
+- Provide 4 distinct options formatted strictly as ["A) ...", "B) ...", "C) ...", "D) ..."], with correctIndex in 0..3 and 1 crisp, direct sentence explaining the solution.
 
 FORMULA & TONE RULES:
 - Use clean, readable plain Unicode math (e.g., "sin²(θ) + cos²(θ) = 1", "log₂(64) = 6", "√(b² - 4ac)", "π/6", "ΔH < 0", "x̅", "p̂"). NEVER use raw LaTeX ($...$, $$...$$, \\frac, \\sqrt, \\bar).
@@ -362,7 +500,7 @@ Student Context: ${additionalNotes || "Cumulative semester final review"}
 
 Return ONLY valid JSON matching the schema with:
 - summary: { title, curriculumExplanation, topTipsForFinal (4 subject-specific tactics), synthesizedNotesParagraph, coreCheatSheetMarkdown (dense unit-by-unit formulas/theorems/dates cheat sheet) }
-- timeline: 5 days mapped directly to the selected units
+- timeline: 5 concise days mapped directly to the selected units
 - flashcards: 14 to 16 predictive D'Evelyn exam flashcards
 - quiz: EXACTLY 25 unique cumulative multiple-choice questions`;
 
@@ -382,100 +520,137 @@ Return ONLY valid JSON matching the schema with:
     }
     contents.push({ text: promptMessage });
 
-    const normalizedDeck = await executeGeminiWithRetry(async (aiInstance, modelName, thinkingLevel) => {
-      const response = await aiInstance.models.generateContent({
-        model: modelName,
-        contents,
-        config: {
-          systemInstruction: systemPrompt,
-          thinkingConfig: { thinkingLevel },
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            required: ["summary", "timeline", "flashcards", "quiz"],
-            properties: {
-              summary: {
-                type: Type.OBJECT,
-                required: [
-                  "title",
-                  "curriculumExplanation",
-                  "topTipsForFinal",
-                  "synthesizedNotesParagraph",
-                  "coreCheatSheetMarkdown",
-                ],
-                properties: {
-                  title: { type: Type.STRING },
-                  curriculumExplanation: { type: Type.STRING },
-                  topTipsForFinal: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                  },
-                  synthesizedNotesParagraph: { type: Type.STRING },
-                  coreCheatSheetMarkdown: { type: Type.STRING },
-                },
-              },
-              timeline: {
-                type: Type.ARRAY,
-                items: {
+    let lastStageSent = "";
+    const emitStage = (msg: string) => {
+      if (!ndjson || msg === lastStageSent) return;
+      lastStageSent = msg;
+      ndjson.writeLine({ type: "progress", message: msg });
+    };
+
+    const normalizedDeck = await executeGeminiWithRetry(
+      async (aiInstance, entry, attemptLabel) => {
+        const streamPromise = aiInstance.models.generateContentStream({
+          model: entry.model,
+          contents,
+          config: {
+            systemInstruction: systemPrompt,
+            thinkingConfig: { thinkingLevel: entry.thinkingLevel },
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              required: ["summary", "timeline", "flashcards", "quiz"],
+              properties: {
+                summary: {
                   type: Type.OBJECT,
-                  required: ["dayName", "activityTitle", "activityDescription"],
+                  required: [
+                    "title",
+                    "curriculumExplanation",
+                    "topTipsForFinal",
+                    "synthesizedNotesParagraph",
+                    "coreCheatSheetMarkdown",
+                  ],
                   properties: {
-                    dayName: { type: Type.STRING },
-                    activityTitle: { type: Type.STRING },
-                    activityDescription: { type: Type.STRING },
-                  },
-                },
-              },
-              flashcards: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  required: ["question", "answer"],
-                  properties: {
-                    question: { type: Type.STRING },
-                    answer: { type: Type.STRING },
-                  },
-                },
-              },
-              quiz: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  required: ["question", "options", "correctIndex", "explanation"],
-                  properties: {
-                    question: { type: Type.STRING },
-                    options: {
+                    title: { type: Type.STRING },
+                    curriculumExplanation: { type: Type.STRING },
+                    topTipsForFinal: {
                       type: Type.ARRAY,
                       items: { type: Type.STRING },
                     },
-                    correctIndex: { type: Type.INTEGER },
-                    explanation: { type: Type.STRING },
+                    synthesizedNotesParagraph: { type: Type.STRING },
+                    coreCheatSheetMarkdown: { type: Type.STRING },
+                  },
+                },
+                timeline: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    required: ["dayName", "activityTitle", "activityDescription"],
+                    properties: {
+                      dayName: { type: Type.STRING },
+                      activityTitle: { type: Type.STRING },
+                      activityDescription: { type: Type.STRING },
+                    },
+                  },
+                },
+                flashcards: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    required: ["question", "answer"],
+                    properties: {
+                      question: { type: Type.STRING },
+                      answer: { type: Type.STRING },
+                    },
+                  },
+                },
+                quiz: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    required: ["question", "options", "correctIndex", "explanation"],
+                    properties: {
+                      question: { type: Type.STRING },
+                      options: {
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING },
+                      },
+                      correctIndex: { type: Type.INTEGER },
+                      explanation: { type: Type.STRING },
+                    },
                   },
                 },
               },
             },
           },
-        },
-      });
+        });
 
-      const replyText = response?.text;
-      if (!replyText) {
-        throw new Error("Empty response from Gemini API.");
-      }
-      const parsed = parseGeminiJson(replyText);
-      return validateAndNormalizeDeck(parsed);
-    });
+        const replyText = await collectStreamedText(
+          streamPromise,
+          entry,
+          attemptLabel,
+          (acc) => {
+            const qCount = (acc.match(/"correctIndex"/g) || []).length;
+            if (qCount > 0) {
+              emitStage(`Writing live Mock Final questions (${Math.min(25, qCount)} / 25)...`);
+            } else if (acc.includes('"flashcards"')) {
+              emitStage("Generating predictive D'Evelyn exam flashcards...");
+            } else if (acc.includes('"timeline"')) {
+              emitStage("Building your 5-day finals battle plan...");
+            } else if (acc.includes('"summary"')) {
+              emitStage("Synthesizing core D'Evelyn unit cheat sheet...");
+            }
+          }
+        );
 
-    res.json(normalizedDeck);
+        if (!replyText) {
+          throw new Error("Empty response from Gemini API.");
+        }
+        const parsed = parseGeminiJson(replyText);
+        return validateAndNormalizeDeck(parsed);
+      },
+      (switchMsg) => emitStage(switchMsg)
+    );
+
+    if (ndjson) {
+      ndjson.finishResult(normalizedDeck);
+    } else {
+      res.json(normalizedDeck);
+    }
   } catch (err: any) {
     console.error("Live AI study deck generation failed:", err);
     const { status, message } = extractErrorStatusAndMessage(err);
-    res.status(status).json({ error: message });
+    if (ndjson) {
+      ndjson.finishError(status, message);
+    } else {
+      res.status(status).json({ error: message });
+    }
   }
 });
 
 // REST API endpoint to generate 25 more live AI questions on demand
 app.post("/api/generate-more-questions", async (req, res) => {
+  const ndjson = setupNdjsonStream(req, res);
+
   try {
     const {
       courseCode,
@@ -488,7 +663,11 @@ app.post("/api/generate-more-questions", async (req, res) => {
     } = req.body;
 
     if (!courseCode) {
-      res.status(400).json({ error: "courseCode is required." });
+      if (ndjson) {
+        ndjson.finishError(400, "courseCode is required.");
+      } else {
+        res.status(400).json({ error: "courseCode is required." });
+      }
       return;
     }
 
@@ -505,7 +684,7 @@ STRICT RULES:
 - Every question MUST test real, challenging subject matter from "${activeCourseName}" and predict actual honors/AP/Saxon exam items.
 - Do NOT write generic study-tip questions or drift into any other subject.
 - MATCHING POOL UNIQUENESS CONSTRAINT: Within every group of 10 questions (Q1-Q10, Q11-Q20, Q21-Q25), ALL 10 correct answer strings MUST be completely distinct values/phrases so no two questions in the same set share the same answer text.
-- Format options strictly as ["A) ...", "B) ...", "C) ...", "D) ..."] with correctIndex in 0..3 and crisp 1-2 sentence explanations.
+- Format options strictly as ["A) ...", "B) ...", "C) ...", "D) ..."] with correctIndex in 0..3 and 1 crisp, direct sentence explaining the solution.
 - Use clean Unicode math only (no raw LaTeX $$, \\frac, \\sqrt).
 
 DO NOT repeat or closely paraphrase any of these existing questions:
@@ -513,58 +692,95 @@ ${(existingQuestions || []).map((q: any) => `- ${q.question}`).slice(0, 60).join
 
     const promptMessage = `Generate EXACTLY 25 brand-new predictive multiple-choice questions inside the "quiz" array for ${activeCourseName} (${courseCode}).`;
 
-    const normalizedQuiz = await executeGeminiWithRetry(async (aiInstance, modelName, thinkingLevel) => {
-      const response = await aiInstance.models.generateContent({
-        model: modelName,
-        contents: promptMessage,
-        config: {
-          systemInstruction: systemPrompt,
-          thinkingConfig: { thinkingLevel },
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            required: ["quiz"],
-            properties: {
-              quiz: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  required: ["question", "options", "correctIndex", "explanation"],
-                  properties: {
-                    question: { type: Type.STRING },
-                    options: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING },
+    let lastStageSent = "";
+    const emitStage = (msg: string) => {
+      if (!ndjson || msg === lastStageSent) return;
+      lastStageSent = msg;
+      ndjson.writeLine({ type: "progress", message: msg });
+    };
+
+    const normalizedQuiz = await executeGeminiWithRetry(
+      async (aiInstance, entry, attemptLabel) => {
+        const streamPromise = aiInstance.models.generateContentStream({
+          model: entry.model,
+          contents: promptMessage,
+          config: {
+            systemInstruction: systemPrompt,
+            thinkingConfig: { thinkingLevel: entry.thinkingLevel },
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              required: ["quiz"],
+              properties: {
+                quiz: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    required: ["question", "options", "correctIndex", "explanation"],
+                    properties: {
+                      question: { type: Type.STRING },
+                      options: {
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING },
+                      },
+                      correctIndex: { type: Type.INTEGER },
+                      explanation: { type: Type.STRING },
                     },
-                    correctIndex: { type: Type.INTEGER },
-                    explanation: { type: Type.STRING },
                   },
                 },
               },
             },
           },
-        },
-      });
+        });
 
-      const replyText = response?.text;
-      if (!replyText) {
-        throw new Error("Empty response from Gemini API.");
-      }
+        const replyText = await collectStreamedText(
+          streamPromise,
+          entry,
+          attemptLabel,
+          (acc) => {
+            const qCount = (acc.match(/"correctIndex"/g) || []).length;
+            if (qCount > 0) {
+              emitStage(`Generating 25 more questions (${Math.min(25, qCount)} / 25)...`);
+            }
+          }
+        );
 
-      const parsed = parseGeminiJson(replyText);
-      const quiz = normalizeQuizItems(parsed?.quiz, 25);
-      if (quiz.length < 15) {
-        throw new Error(`AI returned too few valid questions (${quiz.length}).`);
-      }
-      return quiz;
-    });
+        if (!replyText) {
+          throw new Error("Empty response from Gemini API.");
+        }
 
-    res.json({ quiz: normalizedQuiz });
+        const parsed = parseGeminiJson(replyText);
+        const quiz = normalizeQuizItems(parsed?.quiz, 25);
+        if (quiz.length < 15) {
+          throw new Error(`AI returned too few valid questions (${quiz.length}).`);
+        }
+        return quiz;
+      },
+      (switchMsg) => emitStage(switchMsg)
+    );
+
+    if (ndjson) {
+      ndjson.finishResult({ quiz: normalizedQuiz });
+    } else {
+      res.json({ quiz: normalizedQuiz });
+    }
   } catch (err: any) {
     console.error("Live AI generate-more-questions failed:", err);
     const { status, message } = extractErrorStatusAndMessage(err);
-    res.status(status).json({ error: message });
+    if (ndjson) {
+      ndjson.finishError(status, message);
+    } else {
+      res.status(status).json({ error: message });
+    }
   }
+});
+
+// Ensure /api/* middleware errors (e.g. body-parser size/syntax errors) always return JSON, never HTML
+app.use("/api", (err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const status = Number(err?.status || err?.statusCode || 500);
+  res.status(status).json({
+    error: err?.message || "Unexpected API request error.",
+  });
 });
 
 // Serve frontend assets

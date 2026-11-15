@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { Course, StudyDeck } from "../types";
 import { PRESET_COURSES } from "../data/courses";
 import { deduceCourse } from "../utils/courseDeducer";
+import { postJsonOrNdjson } from "../utils/streamFetch";
 import {
   Calculator,
   Sparkles,
@@ -76,6 +77,7 @@ export default function MaterialUploader({ onAnalysisComplete }: MaterialUploade
 
   const [isLoading, setIsLoading] = useState(false);
   const [loadingPhraseIndex, setLoadingPhraseIndex] = useState(0);
+  const [liveStatus, setLiveStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -240,6 +242,7 @@ export default function MaterialUploader({ onAnalysisComplete }: MaterialUploade
     }
 
     setIsLoading(true);
+    setLiveStatus(null);
     setError(null);
 
     const matchedCourse =
@@ -277,29 +280,11 @@ export default function MaterialUploader({ onAnalysisComplete }: MaterialUploade
       fileMimeType: attachedFile?.mimeType || null
     };
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 80_000);
-
     try {
-      const response = await fetch("/api/analyze-finals-material", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: controller.signal
+      const deckData = await postJsonOrNdjson<any>("/api/analyze-finals-material", payload, {
+        timeoutMs: 92_000,
+        onProgress: (msg) => setLiveStatus(msg),
       });
-
-      if (!response.ok) {
-        let errMessage = "Failed to generate live AI study deck for this course.";
-        try {
-          const errData = await response.json();
-          if (errData?.error) errMessage = errData.error;
-        } catch {
-          // ignore non-JSON error body
-        }
-        throw new Error(errMessage);
-      }
-
-      const deckData = await response.json();
 
       const completeDeck: StudyDeck = {
         id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 9),
@@ -322,16 +307,12 @@ export default function MaterialUploader({ onAnalysisComplete }: MaterialUploade
       onAnalysisComplete(completeDeck);
     } catch (err: any) {
       console.error(err);
-      if (err?.name === "AbortError") {
-        setError("Live AI generation timed out after 80 seconds. Click Try Again to retry.");
-      } else {
-        setError(
-          err.message ||
-            "Live AI generation failed unexpectedly. Please click Try Again."
-        );
-      }
+      setError(
+        err?.message ||
+          "Live AI generation failed unexpectedly. Please click Try Again."
+      );
     } finally {
-      clearTimeout(timeoutId);
+      setLiveStatus(null);
       setIsLoading(false);
     }
   };
@@ -858,7 +839,7 @@ export default function MaterialUploader({ onAnalysisComplete }: MaterialUploade
                     />
                   </svg>
                   <span className="font-mono text-xs text-slate-950 font-semibold truncate max-w-xs">
-                    {LOADING_PHRASES[loadingPhraseIndex]}
+                    {liveStatus || LOADING_PHRASES[loadingPhraseIndex]}
                   </span>
                 </>
               ) : (
