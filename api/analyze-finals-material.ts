@@ -1,11 +1,4 @@
-export const config = {
-  maxDuration: 60,
-  api: {
-    bodyParser: {
-      sizeLimit: "50mb",
-    },
-  },
-};
+export const maxDuration = 60;
 
 function parseGeminiJson(rawText: string) {
   let cleaned = rawText.trim();
@@ -15,20 +8,18 @@ function parseGeminiJson(rawText: string) {
   return JSON.parse(cleaned);
 }
 
-export default async function handler(req: any, res: any) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
+export async function POST(request: Request) {
   try {
     const rawKey = process.env.GEMINI_API_KEY;
     if (!rawKey) {
-      return res.status(500).json({
-        error: "GEMINI_API_KEY is missing in Vercel Environment Variables.",
-      });
+      return Response.json(
+        { error: "GEMINI_API_KEY is missing in Vercel Environment Variables." },
+        { status: 500 }
+      );
     }
     const key = rawKey.trim();
 
+    const body = await request.json();
     const {
       schoolName,
       courseCode,
@@ -41,27 +32,44 @@ export default async function handler(req: any, res: any) {
       additionalNotes,
       fileBase64,
       fileMimeType,
-    } = req.body || {};
+    } = body || {};
 
     if (!courseCode) {
-      return res.status(400).json({ error: "courseCode is required." });
+      return Response.json({ error: "courseCode is required." }, { status: 400 });
     }
 
     const activeSchool = schoolName || "D'Evelyn High School";
-    const activeCourseName = courseName || `Course ${courseCode}`;
+    const activeCourseName = courseName || "Course " + courseCode;
 
-    const systemPrompt = `You are an expert Academic Coach specializing in rigorous high school and AP curriculums.
-Generate a complete, high-yield finals preparation study deck for "${activeSchool}" — Course: "${courseCode}" (${activeCourseName}).
+    const systemPrompt =
+      "You are an expert Academic Coach specializing in rigorous high school and AP curriculums. " +
+      "Generate a complete, high-yield finals preparation study deck for " +
+      activeSchool +
+      " — Course: " +
+      courseCode +
+      " (" +
+      activeCourseName +
+      "). " +
+      "RULES: DO NOT use raw LaTeX (no $$ or \\frac). Write all math in clean plain unicode text. " +
+      "Keep the tone focused, encouraging, and 100% textbook accurate. " +
+      "EVERY quiz question MUST test real subject content (no generic study-habit filler questions). " +
+      "Metadata: Department: " +
+      (department || "Deduce from code") +
+      ", Focus: " +
+      (curriculumDetails || "Standard") +
+      ", Format: " +
+      (examFocus || "Cumulative exam") +
+      ", Strategy: " +
+      (studyStrategy || "Active recall") +
+      ". Student Notes: " +
+      (additionalNotes || "None") +
+      ".";
 
-RULES:
-- DO NOT use raw LaTeX (no $$ or \\frac). Write all math in clean plain unicode text (e.g. "m = (y2 - y1) / (x2 - x1)").
-- Keep the tone focused, encouraging, and 100% textbook accurate.
-- EVERY quiz question MUST test real subject content (no generic study-habit filler questions).
-- Metadata: Department: ${department || "Deduce from code"}, Focus: ${curriculumDetails || "Standard"}, Format: ${examFocus || "Cumulative exam"}, Strategy: ${studyStrategy || "Active recall"}.
-- Student Notes: ${additionalNotes || "None"}.`;
-
-    const promptMessage = `Create a study companion deck for course code: ${courseCode}. Generate EXACTLY 25 concise, high-value multiple choice questions inside "quiz".
-${pastedText ? `Reference notes:\n"""\n${pastedText}\n"""` : ""}`;
+    const promptMessage =
+      "Create a study companion deck for course code: " +
+      courseCode +
+      '. Generate EXACTLY 25 concise, high-value multiple choice questions inside "quiz".' +
+      (pastedText ? "\nReference notes:\n" + pastedText : "");
 
     const parts: any[] = [];
     if (fileBase64 && fileMimeType) {
@@ -75,7 +83,7 @@ ${pastedText ? `Reference notes:\n"""\n${pastedText}\n"""` : ""}`;
     }
     parts.push({ text: promptMessage });
 
-    const payload = JSON.stringify({
+    const requestBody = JSON.stringify({
       systemInstruction: {
         parts: [{ text: systemPrompt }],
       },
@@ -148,11 +156,16 @@ ${pastedText ? `Reference notes:\n"""\n${pastedText}\n"""` : ""}`;
     let lastError: any = null;
 
     for (const model of models) {
-      const url = `https://googleapis.com{model}:generateContent?key=${encodeURIComponent(key)}`;
-      const geminiRes = await fetch(url, {
+      const apiUrl =
+        "https://googleapis.com" +
+        model +
+        ":generateContent?key=" +
+        encodeURIComponent(key);
+
+      const geminiRes = await fetch(apiUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: payload,
+        body: requestBody,
       });
 
       const data = await geminiRes.json();
@@ -161,24 +174,24 @@ ${pastedText ? `Reference notes:\n"""\n${pastedText}\n"""` : ""}`;
         continue;
       }
 
-      const candidates = data && Array.isArray(data.candidates) ? data.candidates : [];
-      const firstCand = candidates.length > 0 ? candidates.at(0) : null;
-      const respParts =
-        firstCand && firstCand.content && Array.isArray(firstCand.content.parts)
-          ? firstCand.content.parts
-          : [];
+      const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
+      const firstCandidate = candidates.length > 0 ? candidates.at(0) : null;
+      const respParts = Array.isArray(firstCandidate?.content?.parts)
+        ? firstCandidate.content.parts
+        : [];
       const firstPart = respParts.length > 0 ? respParts.at(0) : null;
-      const replyText = firstPart ? firstPart.text : null;
+      const replyText = firstPart?.text;
 
       if (replyText) {
-        return res.status(200).json(parseGeminiJson(replyText));
+        return Response.json(parseGeminiJson(replyText));
       }
     }
 
-    return res.status(500).json(lastError || { error: "Gemini API did not return content." });
+    return Response.json(lastError || { error: "Failed to reach Gemini API." }, { status: 500 });
   } catch (error: any) {
-    return res.status(500).json({
-      error: error?.message || "Unexpected server error",
-    });
+    return Response.json(
+      { error: error?.message || "Server error" },
+      { status: 500 }
+    );
   }
 }
