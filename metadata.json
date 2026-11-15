@@ -1,0 +1,6 @@
+{
+  "name": "GPA Battle Royale",
+  "description": "A focused finals study deck builder where students upload a study sheet PDF or course code to prepare with custom practice exams, 5-day study plans, and active recall flashcards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
