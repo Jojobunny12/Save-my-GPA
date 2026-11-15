@@ -1,5 +1,3 @@
-import { GoogleGenAI, Type } from "@google/genai";
-
 export const maxDuration = 60;
 
 function parseGeminiJson(rawText: string) {
@@ -42,7 +40,7 @@ export async function POST(request: Request) {
     const activeSchool = schoolName || "D'Evelyn High School";
     const activeCourseName = courseName || `Course ${courseCode}`;
 
-    const fullPrompt = `You are an expert Academic Coach specializing in rigorous high school and AP curriculums.
+    const systemPrompt = `You are an expert Academic Coach specializing in rigorous high school and AP curriculums.
 Generate a complete, high-yield finals preparation study deck for "${activeSchool}" — Course: "${courseCode}" (${activeCourseName}).
 
 RULES:
@@ -50,97 +48,110 @@ RULES:
 - Keep the tone focused, encouraging, and 100% textbook accurate.
 - EVERY quiz question MUST test real subject content (no generic study-habit filler questions).
 - Metadata: Department: ${department || "Deduce from code"}, Focus: ${curriculumDetails || "Standard"}, Format: ${examFocus || "Cumulative exam"}, Strategy: ${studyStrategy || "Active recall"}.
-- Student Notes: ${additionalNotes || "None"}.
+- Student Notes: ${additionalNotes || "None"}.`;
 
-TASK:
-Create a study companion deck for course code: ${courseCode}. Generate EXACTLY 25 concise, high-value multiple choice questions inside "quiz".
+    const promptMessage = `Create a study companion deck for course code: ${courseCode}. Generate EXACTLY 25 concise, high-value multiple choice questions inside "quiz".
 ${pastedText ? `Reference notes:\n"""\n${pastedText}\n"""` : ""}`;
 
-    const contents: any[] = [];
+    const parts: any[] = [];
     if (fileBase64 && fileMimeType) {
       const cleanBase64 = fileBase64.replace(/^data:.*;base64,/, "");
-      contents.push({
+      parts.push({
         inlineData: {
           mimeType: fileMimeType,
           data: cleanBase64,
         },
       });
     }
-    contents.push({ text: fullPrompt });
+    parts.push({ text: promptMessage });
 
-    const ai = new GoogleGenAI({ apiKey: key });
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          required: ["summary", "timeline", "flashcards", "quiz"],
-          properties: {
-            summary: {
-              type: Type.OBJECT,
-              required: [
-                "title",
-                "curriculumExplanation",
-                "topTipsForFinal",
-                "synthesizedNotesParagraph",
-                "coreCheatSheetMarkdown",
-              ],
+    const geminiRes = await fetch(
+      `https://googleapis.com{encodeURIComponent(key)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [{ text: systemPrompt }],
+          },
+          contents: [{ role: "user", parts }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: "OBJECT",
+              required: ["summary", "timeline", "flashcards", "quiz"],
               properties: {
-                title: { type: Type.STRING },
-                curriculumExplanation: { type: Type.STRING },
-                topTipsForFinal: { type: Type.ARRAY, items: { type: Type.STRING } },
-                synthesizedNotesParagraph: { type: Type.STRING },
-                coreCheatSheetMarkdown: { type: Type.STRING },
-              },
-            },
-            timeline: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                required: ["dayName", "activityTitle", "activityDescription"],
-                properties: {
-                  dayName: { type: Type.STRING },
-                  activityTitle: { type: Type.STRING },
-                  activityDescription: { type: Type.STRING },
+                summary: {
+                  type: "OBJECT",
+                  required: [
+                    "title",
+                    "curriculumExplanation",
+                    "topTipsForFinal",
+                    "synthesizedNotesParagraph",
+                    "coreCheatSheetMarkdown",
+                  ],
+                  properties: {
+                    title: { type: "STRING" },
+                    curriculumExplanation: { type: "STRING" },
+                    topTipsForFinal: { type: "ARRAY", items: { type: "STRING" } },
+                    synthesizedNotesParagraph: { type: "STRING" },
+                    coreCheatSheetMarkdown: { type: "STRING" },
+                  },
                 },
-              },
-            },
-            flashcards: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                required: ["question", "answer"],
-                properties: {
-                  question: { type: Type.STRING },
-                  answer: { type: Type.STRING },
+                timeline: {
+                  type: "ARRAY",
+                  items: {
+                    type: "OBJECT",
+                    required: ["dayName", "activityTitle", "activityDescription"],
+                    properties: {
+                      dayName: { type: "STRING" },
+                      activityTitle: { type: "STRING" },
+                      activityDescription: { type: "STRING" },
+                    },
+                  },
                 },
-              },
-            },
-            quiz: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                required: ["question", "options", "correctIndex", "explanation"],
-                properties: {
-                  question: { type: Type.STRING },
-                  options: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  correctIndex: { type: Type.INTEGER },
-                  explanation: { type: Type.STRING },
+                flashcards: {
+                  type: "ARRAY",
+                  items: {
+                    type: "OBJECT",
+                    required: ["question", "answer"],
+                    properties: {
+                      question: { type: "STRING" },
+                      answer: { type: "STRING" },
+                    },
+                  },
+                },
+                quiz: {
+                  type: "ARRAY",
+                  items: {
+                    type: "OBJECT",
+                    required: ["question", "options", "correctIndex", "explanation"],
+                    properties: {
+                      question: { type: "STRING" },
+                      options: { type: "ARRAY", items: { type: "STRING" } },
+                      correctIndex: { type: "INTEGER" },
+                      explanation: { type: "STRING" },
+                    },
+                  },
                 },
               },
             },
           },
-        },
-      },
-    });
+        }),
+      }
+    );
 
-    if (!response?.text) {
+    const data = await geminiRes.json();
+    if (!geminiRes.ok) {
+      return Response.json(data, { status: geminiRes.status });
+    }
+
+    const replyText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!replyText) {
       throw new Error("Empty response from Gemini API.");
     }
 
-    return Response.json(parseGeminiJson(response.text));
+    return Response.json(parseGeminiJson(replyText));
   } catch (error: any) {
     console.error("API Error:", error);
     return Response.json(
