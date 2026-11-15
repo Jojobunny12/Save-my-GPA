@@ -1,6 +1,4 @@
-export const maxDuration = 60;
-
-function parseGeminiJson(rawText: string) {
+function parseGeminiJson(rawText) {
   let cleaned = rawText.trim();
   if (cleaned.startsWith("```")) {
     cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
@@ -8,18 +6,21 @@ function parseGeminiJson(rawText: string) {
   return JSON.parse(cleaned);
 }
 
-export async function POST(request: Request) {
+module.exports = async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
   try {
     const rawKey = process.env.GEMINI_API_KEY;
     if (!rawKey) {
-      return Response.json(
-        { error: "GEMINI_API_KEY is missing in Vercel Environment Variables." },
-        { status: 500 }
-      );
+      return res.status(500).json({
+        error: "GEMINI_API_KEY is missing in Vercel Environment Variables.",
+      });
     }
     const key = rawKey.trim();
 
-    const body = await request.json();
+    const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
     const {
       schoolName,
       courseCode,
@@ -32,46 +33,39 @@ export async function POST(request: Request) {
       additionalNotes,
       fileBase64,
       fileMimeType,
-    } = body || {};
+    } = body;
 
     if (!courseCode) {
-      return Response.json({ error: "courseCode is required." }, { status: 400 });
+      return res.status(400).json({ error: "courseCode is required." });
     }
 
     const activeSchool = schoolName || "D'Evelyn High School";
     const activeCourseName = courseName || "Course " + courseCode;
 
     const systemPrompt =
-      "You are an expert Academic Coach specializing in rigorous high school and AP curriculums. " +
-      "Generate a complete, high-yield finals preparation study deck for " +
+      "You are an expert Academic Coach for rigorous high school and AP curriculums. " +
+      "Generate a concise, high-yield finals study deck for " +
       activeSchool +
       " — Course: " +
       courseCode +
       " (" +
       activeCourseName +
       "). " +
-      "RULES: DO NOT use raw LaTeX (no $$ or \\frac). Write all math in clean plain unicode text. " +
-      "Keep the tone focused, encouraging, and 100% textbook accurate. " +
-      "EVERY quiz question MUST test real subject content (no generic study-habit filler questions). " +
-      "Metadata: Department: " +
-      (department || "Deduce from code") +
-      ", Focus: " +
-      (curriculumDetails || "Standard") +
-      ", Format: " +
-      (examFocus || "Cumulative exam") +
-      ", Strategy: " +
-      (studyStrategy || "Active recall") +
-      ". Student Notes: " +
-      (additionalNotes || "None") +
-      ".";
+      "RULES: NO raw LaTeX (use clean plain unicode math). Keep explanations crisp (1-2 sentences). " +
+      "Every quiz question must test real subject content. " +
+      "Department: " + (department || "Deduce") +
+      ", Focus: " + (curriculumDetails || "Standard") +
+      ", Format: " + (examFocus || "Cumulative") +
+      ", Strategy: " + (studyStrategy || "Active recall") +
+      ". Notes: " + (additionalNotes || "None") + ".";
 
     const promptMessage =
-      "Create a study companion deck for course code: " +
+      "Create a study companion deck for course: " +
       courseCode +
-      '. Generate EXACTLY 25 concise, high-value multiple choice questions inside "quiz".' +
-      (pastedText ? "\nReference notes:\n" + pastedText : "");
+      '. Generate EXACTLY 25 concise multiple choice questions inside "quiz".' +
+      (pastedText ? "\nReference notes:\n" + pastedText.slice(0, 12000) : "");
 
-    const parts: any[] = [];
+    const parts = [];
     if (fileBase64 && fileMimeType) {
       const cleanBase64 = fileBase64.replace(/^data:.*;base64,/, "");
       parts.push({
@@ -152,11 +146,15 @@ export async function POST(request: Request) {
       },
     });
 
-    const models = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
-    let lastError: any = null;
+    const models = ["gemini-2.5-flash-lite", "gemini-2.5-flash"];
+    let lastError = null;
 
     for (const model of models) {
-const apiUrl = ["https://googleapis.com", "v1beta", "models", model + ":generateContent?key=" + encodeURIComponent(key)].join("/");
+      const baseHost = key.startsWith("AQ.")
+        ? "https://googleapis.com"
+        : "https://googleapis.com";
+
+      const apiUrl = [baseHost, model + ":generateContent?key=" + encodeURIComponent(key)].join("/");
 
       const geminiRes = await fetch(apiUrl, {
         method: "POST",
@@ -164,7 +162,17 @@ const apiUrl = ["https://googleapis.com", "v1beta", "models", model + ":generate
         body: requestBody,
       });
 
-      const data = await geminiRes.json();
+      const rawResponseText = await geminiRes.text();
+      let data = null;
+      try {
+        data = JSON.parse(rawResponseText);
+      } catch (e) {
+        lastError = {
+          error: "Non-JSON response from Google (" + geminiRes.status + "): " + rawResponseText.slice(0, 120),
+        };
+        continue;
+      }
+
       if (!geminiRes.ok) {
         lastError = data;
         continue;
@@ -179,16 +187,14 @@ const apiUrl = ["https://googleapis.com", "v1beta", "models", model + ":generate
       const replyText = firstPart?.text;
 
       if (replyText) {
-        return Response.json(parseGeminiJson(replyText));
+        return res.status(200).json(parseGeminiJson(replyText));
       }
     }
 
-    return Response.json(lastError || { error: "Failed to reach Gemini API." }, { status: 500 });
-  } catch (error: any) {
-    return Response.json(
-      { error: error?.message || "Server error" },
-      { status: 500 }
-    );
+    return res.status(500).json(lastError || { error: "Failed to reach Gemini API." });
+  } catch (error) {
+    return res.status(500).json({
+      error: error?.message || "Server error",
+    });
   }
-}
-
+};
