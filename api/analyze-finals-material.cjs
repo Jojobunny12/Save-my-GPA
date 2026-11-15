@@ -6,10 +6,16 @@ function parseGeminiJson(rawText) {
   return JSON.parse(cleaned);
 }
 
-module.exports = async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
+module.exports = async (req, res) => {
+  try {
+    // Your Google AI / Gemini API logic here
+    
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    console.error("API Error:", error);
+    return res.status(500).json({ error: error.message || "Internal Server Error" });
   }
+};
 
   try {
     const rawKey = process.env.GEMINI_API_KEY;
