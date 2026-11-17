@@ -193,11 +193,11 @@ export default function SocraticArenaStudio({
     >
       {/* Left Column: Seminar Thread & Argument Input */}
       <div className="lg:col-span-8 space-y-5">
-        <div className="bg-[#111114]/80 backdrop-blur-xl border border-white/10 rounded-2xl p-6 space-y-5">
+        <div className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-6 space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-4">
             <div>
               <div className="text-xs font-mono text-emerald-400">
-                D&apos;Evelyn Liberal Arts · Socratic Seminar Moderator
+                Bozz GPT Seminar Moderator · AP &amp; Honors Rubric
               </div>
               <h2 className="font-display text-xl font-bold text-white tracking-tight mt-0.5">
                 Thesis Defense &amp; Evidence Arena
@@ -209,7 +209,7 @@ export default function SocraticArenaStudio({
               onClick={() => startFreshSession()}
               className="inline-flex items-center gap-1.5 px-3 py-2 bg-zinc-900 hover:bg-zinc-800 border border-white/10 text-zinc-200 text-xs font-semibold rounded-xl cursor-pointer whitespace-nowrap"
             >
-              <Plus className="h-3.5 w-3.5 text-cyan-400" />
+              <Plus className="h-3.5 w-3.5 text-purple-400" />
               <span>New Seminar</span>
             </button>
           </div>
@@ -221,7 +221,7 @@ export default function SocraticArenaStudio({
                 key={item.label}
                 type="button"
                 onClick={() => startFreshSession(item.prompt)}
-                className="px-3 py-1.5 bg-zinc-950 hover:bg-zinc-900 border border-white/10 hover:border-cyan-400/50 rounded-lg text-[11px] font-mono text-zinc-300 cursor-pointer transition-colors"
+                className="px-3 py-1.5 bg-zinc-950 hover:bg-zinc-900 border border-white/10 hover:border-purple-400/50 rounded-lg text-[11px] font-mono text-zinc-300 cursor-pointer transition-colors"
               >
                 {item.label}
               </button>
@@ -238,7 +238,7 @@ export default function SocraticArenaStudio({
                 rows={2}
                 value={topicPrompt}
                 onChange={(e) => setTopicPrompt(e.target.value)}
-                className="w-full p-3 bg-zinc-950 border border-white/10 focus:border-cyan-400 rounded-xl text-xs text-zinc-100 focus:outline-none leading-relaxed"
+                className="w-full p-3 bg-zinc-950 border border-white/10 focus:border-purple-400 rounded-xl text-xs text-zinc-100 focus:outline-none leading-relaxed"
               />
             </div>
 
@@ -260,7 +260,7 @@ export default function SocraticArenaStudio({
           <div className="space-y-3 max-h-[380px] overflow-y-auto pr-1">
             {turns.length === 0 ? (
               <div className="p-6 bg-zinc-950/70 border border-white/10 rounded-xl text-center space-y-1.5">
-                <MessageSquareQuote className="h-6 w-6 text-cyan-400 mx-auto" />
+                <MessageSquareQuote className="h-6 w-6 text-purple-400 mx-auto" />
                 <p className="text-xs text-zinc-300 font-medium">
                   Present your opening argument with textual or historical evidence below.
                 </p>
@@ -275,7 +275,7 @@ export default function SocraticArenaStudio({
                   className={`p-4 rounded-xl border text-xs leading-relaxed space-y-2.5 ${
                     turn.role === "student"
                       ? "bg-zinc-950 border-white/10 text-zinc-100 ml-6"
-                      : "bg-cyan-950/20 border-cyan-400/35 text-zinc-100 mr-6"
+                      : "bg-purple-950/20 border-purple-400/35 text-zinc-100 mr-6"
                   }`}
                 >
                   <div className="flex items-center justify-between font-mono text-[11px]">
@@ -283,7 +283,7 @@ export default function SocraticArenaStudio({
                       className={
                         turn.role === "student"
                           ? "text-emerald-400 font-bold"
-                          : "text-cyan-300 font-bold"
+                          : "text-purple-300 font-bold"
                       }
                     >
                       {turn.role === "student"
@@ -310,7 +310,7 @@ export default function SocraticArenaStudio({
 
                   {turn.textualEvidenceCheck && (
                     <div className="flex items-start gap-2 text-[11px] text-zinc-400">
-                      <ShieldAlert className="h-3.5 w-3.5 text-cyan-400 shrink-0 mt-0.5" />
+                      <ShieldAlert className="h-3.5 w-3.5 text-purple-400 shrink-0 mt-0.5" />
                       <span>Evidence Check: {turn.textualEvidenceCheck}</span>
                     </div>
                   )}
@@ -362,8 +362,8 @@ export default function SocraticArenaStudio({
             </div>
 
             {error && (
-              <div className="p-3 bg-rose-950/40 border border-rose-500/40 rounded-xl text-xs text-rose-200 flex items-center gap-2">
-                <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />
+              <div className="p-3 bg-red-950/40 border border-red-500/40 rounded-xl text-xs text-red-200 flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 text-red-400 shrink-0" />
                 <span>{error}</span>
               </div>
             )}
@@ -373,7 +373,7 @@ export default function SocraticArenaStudio({
 
       {/* Right Column: Live 4-Axis AP/Honors Rubric + Saved Seminars */}
       <aside className="lg:col-span-4 space-y-5">
-        <div className="bg-[#111114]/80 backdrop-blur-xl border border-white/10 rounded-2xl p-5 space-y-4">
+        <div className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-5 space-y-4">
           <div className="flex items-center justify-between border-b border-white/10 pb-3">
             <h3 className="font-display text-sm font-bold text-white">
               AP / Honors Thesis Rubric
@@ -388,13 +388,13 @@ export default function SocraticArenaStudio({
               <div key={axis.label} className="space-y-1.5">
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-zinc-300">{axis.label}</span>
-                  <span className="font-mono font-bold text-cyan-400 tabular-nums">
+                  <span className="font-mono font-bold text-purple-400 tabular-nums">
                     {axis.value}/25
                   </span>
                 </div>
                 <div className="h-2 w-full bg-zinc-900 rounded-full overflow-hidden">
                   <motion.div
-                    className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400"
+                    className="h-full bg-gradient-to-r from-purple-500 to-emerald-400"
                     initial={{ width: 0 }}
                     animate={{ width: `${(axis.value / 25) * 100}%` }}
                     transition={SPRING_HUD}
@@ -405,7 +405,7 @@ export default function SocraticArenaStudio({
           </div>
         </div>
 
-        <div className="bg-[#111114]/80 backdrop-blur-xl border border-white/10 rounded-2xl p-5 space-y-3">
+        <div className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-5 space-y-3">
           <h3 className="font-display text-sm font-bold text-white border-b border-white/10 pb-2.5">
             Recent Seminar Logs ({sessions.length})
           </h3>
@@ -423,7 +423,7 @@ export default function SocraticArenaStudio({
                   className="w-full text-left p-3 bg-zinc-950/75 hover:bg-zinc-900 border border-white/10 rounded-xl space-y-1 cursor-pointer transition-colors"
                 >
                   <div className="flex items-center justify-between text-[11px] font-mono">
-                    <span className="text-cyan-400">{s.courseCode}</span>
+                    <span className="text-purple-400">{s.courseCode}</span>
                     <span className="text-emerald-400 tabular-nums">
                       {s.latestRubric ? `${s.latestRubric.overallScore}/100` : "Draft"}
                     </span>

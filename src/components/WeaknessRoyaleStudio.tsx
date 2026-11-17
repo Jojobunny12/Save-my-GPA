@@ -31,6 +31,7 @@ interface WeaknessRoyaleStudioProps {
   activeDeck: StudyDeck | null;
   onTelemetryChange: () => void;
   onOpenMatchingExam: () => void;
+  onLaunchBossBattle: () => void;
   onGoToBuilder: () => void;
 }
 
@@ -41,6 +42,7 @@ export default function WeaknessRoyaleStudio({
   activeDeck,
   onTelemetryChange,
   onOpenMatchingExam,
+  onLaunchBossBattle,
   onGoToBuilder,
 }: WeaknessRoyaleStudioProps) {
   const [scope, setScope] = useState<"active" | "all">(activeDeck ? "active" : "all");
@@ -152,20 +154,20 @@ export default function WeaknessRoyaleStudio({
 
   if (decks.length === 0 || queue.length === 0) {
     return (
-      <div className="bg-[#111114]/80 backdrop-blur-xl border border-white/10 rounded-2xl p-10 text-center space-y-4">
-        <Swords className="h-9 w-9 text-cyan-400 mx-auto" />
+      <div className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-10 text-center space-y-4">
+        <Swords className="h-9 w-9 text-purple-400 mx-auto" />
         <h2 className="font-display text-xl font-bold text-white">
-          Weakness Royale Queue Empty
+          Weakness Drill Queue Empty
         </h2>
         <p className="text-xs text-zinc-400 max-w-md mx-auto">
-          Generate at least one D&apos;Evelyn study deck first so the engine can interleave questions across your weakest units.
+          Ingest notes or pick a D&apos;Evelyn course first so Bozz GPT can interleave questions across your weakest units.
         </p>
         <button
           type="button"
           onClick={onGoToBuilder}
-          className="px-5 py-2.5 bg-cyan-400 hover:bg-cyan-300 text-zinc-950 font-bold text-xs rounded-xl cursor-pointer"
+          className="px-5 py-2.5 bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-bold text-xs rounded-xl cursor-pointer"
         >
-          Build Study Deck
+          Ingest Notes or Pick Course
         </button>
       </div>
     );
@@ -195,7 +197,7 @@ export default function WeaknessRoyaleStudio({
                     opacity: 0,
                   }}
                   transition={{ duration: 0.7, ease: "easeOut" }}
-                  className="h-2.5 w-2.5 rounded-full bg-gradient-to-r from-emerald-400 to-cyan-400"
+                  className="h-2.5 w-2.5 rounded-full bg-gradient-to-r from-emerald-400 to-purple-400"
                 />
               );
             })}
@@ -204,13 +206,13 @@ export default function WeaknessRoyaleStudio({
       </AnimatePresence>
 
       {/* Royale HUD Header */}
-      <div className="bg-[#111114]/80 backdrop-blur-xl border border-white/10 rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="text-xs font-mono text-cyan-400">
+          <div className="text-xs font-mono text-purple-400">
             Cognitive Interleaving · Adaptive Weakness Weighting
           </div>
           <h2 className="font-display text-xl font-bold text-white tracking-tight mt-0.5">
-            Interleaved Weakness Royale
+            Interleaved Weakness Drills
           </h2>
         </div>
 
@@ -222,7 +224,7 @@ export default function WeaknessRoyaleStudio({
                 onClick={() => setScope("active")}
                 className={`px-3 py-1.5 rounded-lg cursor-pointer whitespace-nowrap ${
                   scope === "active"
-                    ? "bg-cyan-400 text-zinc-950 font-bold"
+                    ? "bg-purple-500 text-white font-bold"
                     : "text-zinc-400 hover:text-white"
                 }`}
               >
@@ -233,7 +235,7 @@ export default function WeaknessRoyaleStudio({
                 onClick={() => setScope("all")}
                 className={`px-3 py-1.5 rounded-lg cursor-pointer whitespace-nowrap ${
                   scope === "all"
-                    ? "bg-cyan-400 text-zinc-950 font-bold"
+                    ? "bg-purple-500 text-white font-bold"
                     : "text-zinc-400 hover:text-white"
                 }`}
               >
@@ -241,6 +243,15 @@ export default function WeaknessRoyaleStudio({
               </button>
             </div>
           )}
+
+          <button
+            type="button"
+            onClick={onLaunchBossBattle}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-purple-600/20 hover:bg-purple-600/35 border border-purple-500/50 text-purple-200 font-semibold text-xs rounded-xl cursor-pointer whitespace-nowrap"
+          >
+            <Swords className="h-3.5 w-3.5 text-purple-400" />
+            <span>Boss Battle</span>
+          </button>
 
           {activeDeck && (
             <button
@@ -256,7 +267,7 @@ export default function WeaknessRoyaleStudio({
       </div>
 
       {/* Live Combo & XP Bar */}
-      <div className="bg-[#111114]/80 backdrop-blur-xl border border-white/10 rounded-xl p-4 space-y-2.5 font-mono tabular-nums">
+      <div className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-xl p-4 space-y-2.5 font-mono tabular-nums">
         <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-4">
             <span className="text-zinc-300">
@@ -269,14 +280,14 @@ export default function WeaknessRoyaleStudio({
           </div>
           <div className="flex items-center gap-4">
             <span className="text-emerald-400 font-bold">+{roundXp} XP</span>
-            <span className="text-cyan-400">
+            <span className="text-purple-400">
               {answeredCount > 0 ? Math.round((correctCount / answeredCount) * 100) : 0}% Acc
             </span>
           </div>
         </div>
         <div className="h-1.5 w-full bg-zinc-800 rounded-full overflow-hidden">
           <motion.div
-            className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400"
+            className="h-full bg-gradient-to-r from-purple-500 to-emerald-400"
             animate={{
               width: `${((roundComplete ? queue.length : currentIdx + 1) / queue.length) * 100}%`,
             }}
@@ -287,7 +298,7 @@ export default function WeaknessRoyaleStudio({
 
       {/* Round Summary or Active Interleaved Question */}
       {roundComplete ? (
-        <div className="bg-[#111114]/80 backdrop-blur-xl border border-emerald-400/35 rounded-2xl p-8 text-center space-y-5">
+        <div className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-emerald-400/35 rounded-2xl p-8 text-center space-y-5">
           <Sparkles className="h-9 w-9 text-emerald-400 mx-auto" />
           <div className="space-y-1">
             <div className="text-xs font-mono text-emerald-400">Interleaved Round Complete</div>
@@ -326,10 +337,10 @@ export default function WeaknessRoyaleStudio({
             variants={STAGGER_CONTAINER}
             initial="hidden"
             animate="visible"
-            className="bg-[#111114]/80 backdrop-blur-xl border border-white/10 rounded-2xl p-6 md:p-7 space-y-5"
+            className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-6 md:p-7 space-y-5"
           >
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3 text-[11px] font-mono">
-              <div className="flex items-center gap-2 text-cyan-400">
+              <div className="flex items-center gap-2 text-purple-400">
                 <span>{currentItem.courseCode}</span>
                 <span className="text-zinc-600">·</span>
                 <span className="text-zinc-200">{currentItem.unitTag}</span>
@@ -348,12 +359,12 @@ export default function WeaknessRoyaleStudio({
                 const isSelected = selectedOpt === idx;
                 const isRight = idx === currentItem.correctIndex;
                 let cls =
-                  "bg-zinc-950/80 border-white/10 hover:border-cyan-400/60 text-zinc-200";
+                  "bg-zinc-950/80 border-white/10 hover:border-purple-400/70 text-zinc-200";
                 if (selectedOpt !== null) {
                   if (isRight) {
                     cls = "bg-emerald-950/45 border-emerald-400/70 text-emerald-200";
                   } else if (isSelected) {
-                    cls = "bg-rose-950/45 border-rose-500/70 text-rose-200";
+                    cls = "bg-red-950/45 border-red-500/70 text-red-200";
                   } else {
                     cls = "bg-zinc-950/40 border-white/5 text-zinc-500";
                   }
@@ -374,7 +385,7 @@ export default function WeaknessRoyaleStudio({
                       <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
                     )}
                     {selectedOpt !== null && isSelected && !isRight && (
-                      <XCircle className="h-4 w-4 text-rose-400 shrink-0" />
+                      <XCircle className="h-4 w-4 text-red-400 shrink-0" />
                     )}
                   </motion.button>
                 );
@@ -388,7 +399,7 @@ export default function WeaknessRoyaleStudio({
                 className="pt-4 border-t border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
               >
                 <div className="text-xs text-zinc-300 leading-relaxed flex-1">
-                  <span className="font-mono font-semibold text-cyan-400 mr-2">
+                  <span className="font-mono font-semibold text-purple-400 mr-2">
                     Diagnostic Note:
                   </span>
                   {cleanMathFormula(currentItem.explanation)}

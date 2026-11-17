@@ -238,18 +238,18 @@ export default function RecallFeynmanStudio({
 
   if (!deck) {
     return (
-      <div className="bg-[#111114]/80 backdrop-blur-xl border border-white/10 rounded-2xl p-10 text-center space-y-4">
-        <Brain className="h-9 w-9 text-cyan-400 mx-auto" />
+      <div className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-10 text-center space-y-4">
+        <Brain className="h-9 w-9 text-purple-400 mx-auto" />
         <h2 className="font-display text-xl font-bold text-white">No Active Study Deck Selected</h2>
         <p className="text-xs text-zinc-400 max-w-md mx-auto">
-          Generate a deck from D&apos;Evelyn&apos;s course catalog or paste your class notes to unlock 3D FSRS Active Recall and Feynman grading.
+          Ingest class notes or pick a D&apos;Evelyn course to unlock 3D FSRS Active Recall and ruthless Feynman grading.
         </p>
         <button
           type="button"
           onClick={onGoToBuilder}
-          className="px-5 py-2.5 bg-cyan-400 hover:bg-cyan-300 text-zinc-950 font-bold text-xs rounded-xl cursor-pointer"
+          className="px-5 py-2.5 bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-bold text-xs rounded-xl cursor-pointer"
         >
-          Go to Deck Studio
+          Ingest Notes / Build Deck
         </button>
       </div>
     );
@@ -272,9 +272,9 @@ export default function RecallFeynmanStudio({
       className="space-y-6 max-w-4xl mx-auto"
     >
       {/* Studio Control Header */}
-      <div className="bg-[#111114]/80 backdrop-blur-xl border border-white/10 rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="text-xs font-mono text-cyan-400">
+          <div className="text-xs font-mono text-purple-400">
             {deck.courseCode} · {deck.courseName}
           </div>
           <h2 className="font-display text-xl font-bold text-white tracking-tight mt-0.5">
@@ -298,7 +298,7 @@ export default function RecallFeynmanStudio({
               type="button"
               onClick={() => setMode("feynman")}
               className={`px-3 py-1.5 rounded-lg cursor-pointer transition-colors whitespace-nowrap ${
-                mode === "feynman" ? "bg-cyan-400 text-zinc-950 font-bold" : "text-zinc-400 hover:text-white"
+                mode === "feynman" ? "bg-purple-500 text-white font-bold" : "text-zinc-400 hover:text-white"
               }`}
             >
               Feynman Grader
@@ -316,7 +316,7 @@ export default function RecallFeynmanStudio({
             }`}
             title="Toggle proven Red/Blue dual-color memory encoding on cards"
           >
-            <Palette className="h-3.5 w-3.5 text-cyan-400" />
+            <Palette className="h-3.5 w-3.5 text-purple-400" />
             <span>{redBlueMemoryTint ? "Red/Blue Tint: On" : "Red/Blue Tint: Off"}</span>
           </button>
 
@@ -335,13 +335,13 @@ export default function RecallFeynmanStudio({
       </div>
 
       {/* Telemetry Progress Strip */}
-      <div className="bg-[#111114]/80 backdrop-blur-xl border border-white/10 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 font-mono text-xs tabular-nums">
+      <div className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 font-mono text-xs tabular-nums">
         <div className="flex items-center gap-3 text-zinc-300">
           <span>
             Card <strong className="text-white">{safeIdx + 1}</strong> / {cardStates.length}
           </span>
           <span className="text-zinc-600">·</span>
-          <span className="text-cyan-400 truncate max-w-[240px]">{activeCard?.unitTag}</span>
+          <span className="text-purple-400 truncate max-w-[240px]">{activeCard?.unitTag}</span>
           <span className="text-zinc-600">·</span>
           <span className="text-zinc-400">{tierLabel}</span>
         </div>
@@ -351,7 +351,7 @@ export default function RecallFeynmanStudio({
             <span className="text-emerald-400 font-semibold">{lastRatingNotice}</span>
           )}
           <div className="inline-flex items-center gap-1.5 text-zinc-300">
-            <Clock className="h-3.5 w-3.5 text-cyan-400" />
+            <Clock className="h-3.5 w-3.5 text-purple-400" />
             <span>{elapsedSec.toFixed(1)}s</span>
           </div>
         </div>
@@ -371,12 +371,12 @@ export default function RecallFeynmanStudio({
               <div
                 className={`backface-hidden absolute inset-0 rounded-2xl p-6 md:p-8 border flex flex-col justify-between shadow-2xl ${
                   redBlueMemoryTint
-                    ? "bg-gradient-to-br from-red-950/45 via-[#111114] to-blue-950/45 border-white/15"
-                    : "bg-[#111114]/90 border-white/15"
+                    ? "bg-gradient-to-br from-red-950/45 via-[#0B0B10] to-blue-950/45 border-white/15"
+                    : "bg-[#0B0B10]/95 border-white/15"
                 }`}
               >
                 <div className="flex items-center justify-between border-b border-white/10 pb-3 text-[11px] font-mono">
-                  <span className="text-cyan-400 font-semibold">Active Recall Prompt</span>
+                  <span className="text-purple-400 font-semibold">Active Recall Prompt</span>
                   <span className="text-zinc-400 tabular-nums">
                     Stability: {activeCard.stability}d · Reps: {activeCard.reps}
                   </span>
@@ -398,7 +398,7 @@ export default function RecallFeynmanStudio({
                 </div>
 
                 <div className="flex items-center justify-center gap-2 border-t border-white/10 pt-3 text-xs font-mono text-zinc-400">
-                  <RefreshCw className="h-3.5 w-3.5 text-cyan-400" />
+                  <RefreshCw className="h-3.5 w-3.5 text-purple-400" />
                   <span>Click card to flip &amp; grade memory stability</span>
                 </div>
               </div>
@@ -435,9 +435,9 @@ export default function RecallFeynmanStudio({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {(
               [
-                { rating: 1 as FSRSRating, label: "Again", sub: "Reset & re-queue", cls: "border-rose-500/40 hover:bg-rose-500/15 text-rose-300" },
+                { rating: 1 as FSRSRating, label: "Again", sub: "Reset & re-queue", cls: "border-red-500/40 hover:bg-red-500/15 text-red-300" },
                 { rating: 2 as FSRSRating, label: "Hard", sub: "Hesitant recall", cls: "border-amber-500/40 hover:bg-amber-500/15 text-amber-300" },
-                { rating: 3 as FSRSRating, label: "Good", sub: "Clean retrieval", cls: "border-cyan-400/40 hover:bg-cyan-400/15 text-cyan-300" },
+                { rating: 3 as FSRSRating, label: "Good", sub: "Clean retrieval", cls: "border-purple-400/40 hover:bg-purple-400/15 text-purple-300" },
                 { rating: 4 as FSRSRating, label: "Easy", sub: "Instant cold recall", cls: "border-emerald-400/40 hover:bg-emerald-400/15 text-emerald-300" },
               ] as const
             ).map((btn) => {
@@ -449,7 +449,7 @@ export default function RecallFeynmanStudio({
                   whileHover={{ y: -2, transition: SPRING_TACTILE }}
                   whileTap={BUTTON_TAP}
                   onClick={() => handleRateCard(btn.rating)}
-                  className={`p-3.5 rounded-xl bg-[#111114]/90 border text-left transition-colors cursor-pointer ${btn.cls}`}
+                  className={`p-3.5 rounded-xl bg-[#0B0B10]/90 border text-left transition-colors cursor-pointer ${btn.cls}`}
                 >
                   <div className="flex items-center justify-between font-mono">
                     <span className="text-xs font-bold">{btn.label}</span>
@@ -478,7 +478,7 @@ export default function RecallFeynmanStudio({
             <button
               type="button"
               onClick={() => setMode("feynman")}
-              className="inline-flex items-center gap-1.5 px-4 py-2 bg-cyan-400/15 hover:bg-cyan-400/25 border border-cyan-400/40 rounded-xl text-xs font-mono font-semibold text-cyan-300 cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-purple-500/15 hover:bg-purple-500/25 border border-purple-400/45 rounded-xl text-xs font-mono font-semibold text-purple-200 cursor-pointer"
             >
               <Sparkles className="h-3.5 w-3.5" />
               <span>Test This Concept in Feynman Mode</span>
@@ -499,16 +499,16 @@ export default function RecallFeynmanStudio({
 
       {/* Mode 2: Feynman Plain-English Diagnostic Grader */}
       {mode === "feynman" && activeCard && (
-        <div className="bg-[#111114]/80 backdrop-blur-xl border border-white/10 rounded-2xl p-6 space-y-5">
+        <div className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-6 space-y-5">
           <div className="space-y-2">
-            <div className="text-[11px] font-mono text-cyan-400">
-              Feynman Technique · Teach Without Jargon
+            <div className="text-[11px] font-mono text-purple-400">
+              Bozz GPT Feynman Technique · Teach Without Jargon
             </div>
             <h3 className="font-display text-lg font-bold text-white leading-snug">
               {cleanMathFormula(activeCard.question)}
             </h3>
             <p className="text-xs text-zinc-400">
-              Explain the underlying logic, boundary conditions, and why it works in plain English as if teaching a classmate.
+              Explain the core logic, boundary conditions, and why it works in plain English—no hand-waving or textbook fluff.
             </p>
           </div>
 
@@ -518,7 +518,7 @@ export default function RecallFeynmanStudio({
               value={feynmanText}
               onChange={(e) => setFeynmanText(e.target.value)}
               placeholder="Write your plain-English explanation here..."
-              className="w-full p-4 bg-zinc-950 border border-white/10 focus:border-cyan-400 rounded-xl text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none leading-relaxed"
+              className="w-full p-4 bg-zinc-950 border border-white/10 focus:border-purple-400 rounded-xl text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none leading-relaxed"
             />
 
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -545,7 +545,7 @@ export default function RecallFeynmanStudio({
                 type="submit"
                 whileTap={BUTTON_TAP}
                 disabled={isGradingFeynman || !feynmanText.trim()}
-                className="inline-flex items-center gap-2 px-5 py-2.5 bg-cyan-400 hover:bg-cyan-300 text-zinc-950 font-bold text-xs rounded-xl cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-purple-500 hover:bg-purple-400 text-white font-bold text-xs rounded-xl cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
               >
                 {isGradingFeynman ? (
                   <>
@@ -563,8 +563,8 @@ export default function RecallFeynmanStudio({
           </form>
 
           {feynmanError && (
-            <div className="p-3.5 bg-rose-950/40 border border-rose-500/40 rounded-xl text-xs text-rose-200 flex items-center gap-2">
-              <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />
+            <div className="p-3.5 bg-red-950/40 border border-red-500/40 rounded-xl text-xs text-red-200 flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 text-red-400 shrink-0" />
               <span>{feynmanError}</span>
             </div>
           )}
@@ -585,8 +585,8 @@ export default function RecallFeynmanStudio({
                         feynmanResult.overallScore >= 85
                           ? "text-emerald-400"
                           : feynmanResult.overallScore >= 65
-                          ? "text-cyan-400"
-                          : "text-amber-400"
+                          ? "text-purple-400"
+                          : "text-red-400"
                       }`}
                     >
                       {feynmanResult.overallScore}% · {feynmanResult.verdict}
@@ -619,8 +619,8 @@ export default function RecallFeynmanStudio({
                     </ul>
                   </div>
 
-                  <div className="p-4 bg-amber-950/20 border border-amber-500/30 rounded-xl space-y-2">
-                    <div className="font-mono font-bold text-amber-400 flex items-center gap-1.5">
+                  <div className="p-4 bg-red-950/20 border border-red-500/30 rounded-xl space-y-2">
+                    <div className="font-mono font-bold text-red-400 flex items-center gap-1.5">
                       <AlertCircle className="h-4 w-4" />
                       <span>Detected Blind Spots</span>
                     </div>
@@ -633,7 +633,7 @@ export default function RecallFeynmanStudio({
                 </div>
 
                 <div className="p-4 bg-zinc-950 border border-white/10 rounded-xl space-y-1.5 text-xs">
-                  <div className="font-mono font-semibold text-cyan-400">
+                  <div className="font-mono font-semibold text-purple-400">
                     Model Reference Explanation
                   </div>
                   <p className="text-zinc-200 leading-relaxed">

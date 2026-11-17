@@ -22,16 +22,16 @@ import MaterialUploader from "./components/MaterialUploader";
 import StudyDeckView from "./components/StudyDeckView";
 import RecallFeynmanStudio from "./components/RecallFeynmanStudio";
 import WeaknessRoyaleStudio from "./components/WeaknessRoyaleStudio";
+import FinalBossBattle from "./components/FinalBossBattle";
 import SocraticArenaStudio from "./components/SocraticArenaStudio";
 import DualCodingVisualizer from "./components/DualCodingVisualizer";
 
 const NAV_ITEMS: Array<{ id: WorkspaceRoute; label: string }> = [
   { id: "command", label: "Command" },
-  { id: "builder", label: "Deck Studio" },
-  { id: "recall", label: "Recall & Feynman" },
-  { id: "royale", label: "Weakness Royale" },
-  { id: "socratic", label: "Socratic" },
-  { id: "map", label: "Concept Map" },
+  { id: "builder", label: "Ingest Notes" },
+  { id: "recall", label: "Active Recall" },
+  { id: "royale", label: "Weakness Drills" },
+  { id: "boss", label: "Boss Battle" },
 ];
 
 export default function App() {
@@ -43,6 +43,7 @@ export default function App() {
     "summary" | "timeline" | "flashcards" | "quiz"
   >("summary");
   const [royaleSubMode, setRoyaleSubMode] = useState<"royale" | "matching">("royale");
+  const [bossSubMode, setBossSubMode] = useState<"battle" | "matching">("battle");
 
   const [telemetryRevision, setTelemetryRevision] = useState(0);
   const [redBlueMemoryTint, setRedBlueMemoryTint] = useState<boolean>(
@@ -52,7 +53,6 @@ export default function App() {
     loadTestDates()
   );
 
-  // Hydrate saved decks and seed FSRS concepts on load
   useEffect(() => {
     try {
       const stored = localStorage.getItem("dev_study_decks");
@@ -147,6 +147,9 @@ export default function App() {
     if (nextRoute === "royale") {
       setRoyaleSubMode("royale");
     }
+    if (nextRoute === "boss") {
+      setBossSubMode("battle");
+    }
     setRoute(nextRoute);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -158,7 +161,7 @@ export default function App() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = "GPARoyale_Offline_Companion.html";
+      link.download = "BozzGPT_Offline_Companion.html";
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -170,22 +173,22 @@ export default function App() {
 
   return (
     <MotionConfig reducedMotion="user">
-      <div className="min-h-screen bg-[#09090B] obsidian-grid-bg text-zinc-100 antialiased font-sans pb-16">
+      <div className="min-h-screen bg-[#050507] obsidian-grid-bg text-zinc-100 antialiased font-sans pb-16">
         {/* Three-Zone Tactical Obsidian Top Bar */}
-        <header className="bg-[#09090B]/85 backdrop-blur-xl border-b border-white/10 sticky top-0 z-50">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+        <header className="bg-[#050507]/85 backdrop-blur-2xl border-b border-white/10 sticky top-0 z-50">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-8">
             {/* Zone 1: Brand Wordmark */}
             <button
               type="button"
               onClick={() => navigateTo("command")}
-              className="font-display text-lg font-extrabold tracking-tight text-white hover:text-cyan-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-baseline gap-1.5"
+              className="font-display text-lg font-extrabold tracking-tight text-white hover:text-purple-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-baseline gap-1.5"
             >
-              <span>GPA</span>
-              <span className="text-emerald-400">Royale</span>
+              <span>Bozz</span>
+              <span className="text-emerald-400">GPT</span>
             </button>
 
-            {/* Zone 2: Shared-Element Motion Navigation */}
-            <nav className="hidden md:flex items-center gap-1 overflow-x-auto">
+            {/* Zone 2: Shared-Element Motion Navigation (5 Single-Line Items) */}
+            <nav className="hidden md:flex items-center gap-2">
               {NAV_ITEMS.map((item) => {
                 const isActive = route === item.id;
                 return (
@@ -200,9 +203,9 @@ export default function App() {
                     <span>{item.label}</span>
                     {isActive && (
                       <motion.div
-                        layoutId="gparoyale-nav-underline"
+                        layoutId="bozzgpt-nav-underline"
                         transition={SPRING_TACTILE}
-                        className="absolute left-2.5 right-2.5 bottom-0.5 h-0.5 rounded-full bg-gradient-to-r from-cyan-400 to-emerald-400"
+                        className="absolute left-2.5 right-2.5 bottom-0.5 h-0.5 rounded-full bg-gradient-to-r from-purple-500 to-emerald-400"
                       />
                     )}
                   </button>
@@ -210,30 +213,12 @@ export default function App() {
               })}
             </nav>
 
-            {/* Zone 3: Active Deck Switcher + Offline Export */}
-            <div className="flex items-center gap-2.5 shrink-0">
-              {savedDecks.length > 0 && (
-                <select
-                  aria-label="Active Study Deck"
-                  value={activeDeck?.id || ""}
-                  onChange={(e) => {
-                    const found = savedDecks.find((d) => d.id === e.target.value);
-                    if (found) setActiveDeck(found);
-                  }}
-                  className="hidden sm:block max-w-[165px] px-2.5 py-1.5 bg-zinc-900 border border-white/10 rounded-lg font-mono text-[11px] text-cyan-300 focus:outline-none focus:border-cyan-400 cursor-pointer"
-                >
-                  {savedDecks.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.courseCode} · {d.courseName}
-                    </option>
-                  ))}
-                </select>
-              )}
-
+            {/* Zone 3: Single Primary Action */}
+            <div className="flex items-center shrink-0">
               <button
                 type="button"
                 onClick={downloadStandaloneApp}
-                className="inline-flex items-center gap-2 px-3.5 py-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-100 border border-white/15 hover:border-cyan-400/50 font-semibold text-xs rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-2 px-3.5 py-2 bg-[#0B0B10] hover:bg-zinc-900 text-zinc-100 border border-white/15 hover:border-purple-400/60 font-semibold text-xs rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
                 title="Download standalone school-safe offline companion"
               >
                 <Download className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
@@ -253,7 +238,7 @@ export default function App() {
                   onClick={() => navigateTo(item.id)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${
                     isActive
-                      ? "bg-cyan-400 text-zinc-950 font-bold"
+                      ? "bg-emerald-400 text-zinc-950 font-bold"
                       : "bg-zinc-900 text-zinc-400"
                   }`}
                 >
@@ -265,7 +250,69 @@ export default function App() {
         </header>
 
         {/* Main Workspace */}
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-7">
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-7 space-y-5">
+          {/* Active Deck & Humanities Utility Strip on Secondary Views */}
+          {route !== "command" && savedDecks.length > 0 && !deckHubOpen && (
+            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-xl text-xs">
+              <div className="flex items-center gap-2.5">
+                <span className="font-mono text-[11px] text-zinc-400">Active Deck:</span>
+                <select
+                  aria-label="Active Study Deck"
+                  value={activeDeck?.id || ""}
+                  onChange={(e) => {
+                    const found = savedDecks.find((d) => d.id === e.target.value);
+                    if (found) setActiveDeck(found);
+                  }}
+                  className="max-w-[260px] px-2.5 py-1 bg-zinc-950 border border-white/10 focus:border-purple-400 rounded-lg font-mono text-xs text-emerald-400 focus:outline-none cursor-pointer"
+                >
+                  {savedDecks.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.courseCode} · {d.courseName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2 font-mono text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => navigateTo("socratic")}
+                  className={`px-2.5 py-1 rounded-lg border cursor-pointer transition-colors ${
+                    route === "socratic"
+                      ? "bg-purple-500/20 border-purple-400 text-purple-200"
+                      : "bg-zinc-950 border-white/10 text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  Socratic Seminar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigateTo("map")}
+                  className={`px-2.5 py-1 rounded-lg border cursor-pointer transition-colors ${
+                    route === "map"
+                      ? "bg-emerald-500/20 border-emerald-400 text-emerald-200"
+                      : "bg-zinc-950 border-white/10 text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  Concept Map
+                </button>
+                {activeDeck && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeckHubInitialTab("summary");
+                      setDeckHubOpen(true);
+                      setRoute("builder");
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-zinc-950 border border-white/10 text-zinc-300 hover:text-white cursor-pointer"
+                  >
+                    Study Hub &amp; PDF
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           <AnimatePresence mode="wait">
             {route === "command" && (
               <motion.div
@@ -369,6 +416,38 @@ export default function App() {
                     activeDeck={activeDeck}
                     onTelemetryChange={bumpTelemetry}
                     onOpenMatchingExam={() => setRoyaleSubMode("matching")}
+                    onLaunchBossBattle={() => navigateTo("boss")}
+                    onGoToBuilder={() => navigateTo("builder")}
+                  />
+                )}
+              </motion.div>
+            )}
+
+            {route === "boss" && (
+              <motion.div
+                key={`route-boss-${bossSubMode}`}
+                variants={PANEL_FADE}
+                initial="hidden"
+                animate="visible"
+                exit="exit"
+              >
+                {bossSubMode === "matching" && activeDeck ? (
+                  <StudyDeckView
+                    deck={activeDeck}
+                    initialTab="quiz"
+                    redBlueMemoryTint={redBlueMemoryTint}
+                    onToggleRedBlueTint={handleToggleRedBlueTint}
+                    onBack={() => setBossSubMode("battle")}
+                    onUpdateDeck={handleUpdateDeck}
+                    onTelemetryChange={bumpTelemetry}
+                    onNavigateModule={navigateTo}
+                  />
+                ) : (
+                  <FinalBossBattle
+                    decks={savedDecks}
+                    activeDeck={activeDeck}
+                    onTelemetryChange={bumpTelemetry}
+                    onOpenMatchingExam={() => setBossSubMode("matching")}
                     onGoToBuilder={() => navigateTo("builder")}
                   />
                 )}
@@ -413,3 +492,4 @@ export default function App() {
     </MotionConfig>
   );
 }
+

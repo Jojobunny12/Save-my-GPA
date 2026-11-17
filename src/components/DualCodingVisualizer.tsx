@@ -161,20 +161,20 @@ export default function DualCodingVisualizer({
 
   if (!deck || !graph) {
     return (
-      <div className="bg-[#111114]/80 backdrop-blur-xl border border-white/10 rounded-2xl p-10 text-center space-y-4">
-        <GitBranch className="h-9 w-9 text-cyan-400 mx-auto" />
+      <div className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-10 text-center space-y-4">
+        <GitBranch className="h-9 w-9 text-purple-400 mx-auto" />
         <h2 className="font-display text-xl font-bold text-white">
           No Active Deck to Visualize
         </h2>
         <p className="text-xs text-zinc-400 max-w-md mx-auto">
-          Build a study deck from D&apos;Evelyn courses or paste lecture notes to generate interactive Dual-Coding concept graphs and causal timelines.
+          Ingest notes or pick a D&apos;Evelyn course to generate interactive Dual-Coding concept graphs and causal timelines.
         </p>
         <button
           type="button"
           onClick={onGoToBuilder}
-          className="px-5 py-2.5 bg-cyan-400 hover:bg-cyan-300 text-zinc-950 font-bold text-xs rounded-xl cursor-pointer"
+          className="px-5 py-2.5 bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-bold text-xs rounded-xl cursor-pointer"
         >
-          Open Deck Studio
+          Open Note Ingestion Studio
         </button>
       </div>
     );
@@ -188,9 +188,9 @@ export default function DualCodingVisualizer({
       className="space-y-6"
     >
       {/* Header */}
-      <div className="bg-[#111114]/80 backdrop-blur-xl border border-white/10 rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="text-xs font-mono text-cyan-400">
+          <div className="text-xs font-mono text-purple-400">
             Dual-Coding Spatial Architecture · {deck.courseCode}
           </div>
           <h2 className="font-display text-xl font-bold text-white tracking-tight mt-0.5">
@@ -203,7 +203,7 @@ export default function DualCodingVisualizer({
           whileTap={BUTTON_TAP}
           disabled={isExtracting}
           onClick={handleExtractAiMap}
-          className="inline-flex items-center gap-2 px-4 py-2.5 bg-cyan-400 hover:bg-cyan-300 text-zinc-950 font-bold text-xs rounded-xl cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
+          className="inline-flex items-center gap-2 px-4 py-2.5 bg-purple-500 hover:bg-purple-400 text-white font-bold text-xs rounded-xl cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
         >
           {isExtracting ? (
             <>
@@ -220,15 +220,15 @@ export default function DualCodingVisualizer({
       </div>
 
       {error && (
-        <div className="p-3.5 bg-rose-950/40 border border-rose-500/40 rounded-xl text-xs text-rose-200 flex items-center gap-2">
-          <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />
+        <div className="p-3.5 bg-red-950/40 border border-red-500/40 rounded-xl text-xs text-red-200 flex items-center gap-2">
+          <AlertCircle className="h-4 w-4 text-red-400 shrink-0" />
           <span>{error}</span>
         </div>
       )}
 
       {/* Main Graph + Node Inspector */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        <div className="lg:col-span-8 bg-[#111114]/80 backdrop-blur-xl border border-white/10 rounded-2xl p-4 space-y-3">
+        <div className="lg:col-span-8 bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-4 space-y-3">
           <div className="flex items-center justify-between text-[11px] font-mono text-zinc-400 px-1">
             <span>Interactive SVG Concept Topology (Click any node)</span>
             <span>{graph.nodes.length} nodes · {graph.edges.length} links</span>
@@ -238,7 +238,7 @@ export default function DualCodingVisualizer({
             <svg viewBox="0 0 800 440" className="w-full h-auto block">
               <defs>
                 <marker
-                  id="arrow-cyan"
+                  id="arrow-purple"
                   viewBox="0 0 10 10"
                   refX="8"
                   refY="5"
@@ -246,7 +246,7 @@ export default function DualCodingVisualizer({
                   markerHeight="6"
                   orient="auto-start-reverse"
                 >
-                  <path d="M 0 1 L 10 5 L 0 9 z" fill="rgba(34,211,238,0.55)" />
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="rgba(139,92,246,0.65)" />
                 </marker>
               </defs>
 
@@ -269,15 +269,15 @@ export default function DualCodingVisualizer({
                       y1={y1}
                       x2={x2}
                       y2={y2}
-                      stroke="rgba(34,211,238,0.28)"
+                      stroke="rgba(139,92,246,0.34)"
                       strokeWidth="1.6"
-                      markerEnd="url(#arrow-cyan)"
+                      markerEnd="url(#arrow-purple)"
                     />
                     <text
                       x={mx}
                       y={my - 4}
                       textAnchor="middle"
-                      fill="rgba(161,161,170,0.8)"
+                      fill="rgba(161,161,170,0.85)"
                       fontSize="9"
                       fontFamily="JetBrains Mono, monospace"
                     >
@@ -294,9 +294,9 @@ export default function DualCodingVisualizer({
                 const isSelected = selectedNode?.id === node.id;
                 const strokeColor =
                   node.tier === "synthesis"
-                    ? "#34D399"
+                    ? "#10B981"
                     : node.tier === "mechanism"
-                    ? "#22D3EE"
+                    ? "#8B5CF6"
                     : "#94A3B8";
 
                 return (
@@ -311,8 +311,8 @@ export default function DualCodingVisualizer({
                       width="144"
                       height="44"
                       rx="10"
-                      fill={isSelected ? "rgba(34,211,238,0.18)" : "rgba(17,17,20,0.95)"}
-                      stroke={isSelected ? "#34D399" : strokeColor}
+                      fill={isSelected ? "rgba(139,92,246,0.22)" : "rgba(11,11,16,0.95)"}
+                      stroke={isSelected ? "#10B981" : strokeColor}
                       strokeWidth={isSelected ? "2.4" : "1.2"}
                     />
                     <text
@@ -338,9 +338,9 @@ export default function DualCodingVisualizer({
         {/* Right Side: Selected Concept Inspector & Quick Drill */}
         <aside className="lg:col-span-4 space-y-4">
           {selectedNode && (
-            <div className="bg-[#111114]/80 backdrop-blur-xl border border-white/10 rounded-2xl p-5 space-y-4">
+            <div className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-5 space-y-4">
               <div className="space-y-1 border-b border-white/10 pb-3">
-                <div className="text-[11px] font-mono text-cyan-400">
+                <div className="text-[11px] font-mono text-purple-400">
                   {selectedNode.unitTag} · {selectedNode.tier}
                 </div>
                 <h3 className="font-display text-base font-bold text-white">
@@ -358,7 +358,7 @@ export default function DualCodingVisualizer({
                 return (
                   <div className="p-3 bg-zinc-950 border border-white/10 rounded-xl flex items-center justify-between text-xs font-mono tabular-nums">
                     <span className="text-zinc-400">Unit Retention</span>
-                    <span className={pct !== null && pct >= 75 ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
+                    <span className={pct !== null && pct >= 75 ? "text-emerald-400 font-bold" : "text-red-400 font-bold"}>
                       {pct !== null ? `${pct}% (${stat?.count} items)` : "Not drilled yet"}
                     </span>
                   </div>
@@ -377,17 +377,17 @@ export default function DualCodingVisualizer({
                 <button
                   type="button"
                   onClick={onDrillRoyale}
-                  className="inline-flex items-center justify-center gap-1.5 py-2.5 bg-zinc-900 hover:bg-zinc-800 border border-white/10 text-cyan-300 font-semibold text-xs rounded-xl cursor-pointer"
+                  className="inline-flex items-center justify-center gap-1.5 py-2.5 bg-zinc-900 hover:bg-zinc-800 border border-white/10 text-purple-300 font-semibold text-xs rounded-xl cursor-pointer"
                 >
                   <Swords className="h-3.5 w-3.5" />
-                  <span>Royale Drill</span>
+                  <span>Weakness Drills</span>
                 </button>
               </div>
             </div>
           )}
 
           {/* Chronological / Causal Timeline */}
-          <div className="bg-[#111114]/80 backdrop-blur-xl border border-white/10 rounded-2xl p-5 space-y-3">
+          <div className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-5 space-y-3">
             <h3 className="font-display text-sm font-bold text-white border-b border-white/10 pb-2.5">
               Concept Sequence Timeline
             </h3>

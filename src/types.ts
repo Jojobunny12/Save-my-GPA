@@ -160,7 +160,7 @@ export interface SocraticSession {
 export interface TelemetrySession {
   id: string;
   timestamp: string;
-  mode: 'recall' | 'feynman' | 'royale' | 'socratic' | 'exam';
+  mode: 'recall' | 'feynman' | 'royale' | 'boss' | 'socratic' | 'exam';
   courseCode: string;
   accuracyPct: number;
   avgLatencyMs: number;
@@ -188,5 +188,6 @@ export type WorkspaceRoute =
   | 'builder'
   | 'recall'
   | 'royale'
+  | 'boss'
   | 'socratic'
   | 'map';

@@ -355,15 +355,15 @@ export default function MaterialUploader({
       {/* Final Grade Target Estimator */}
       <section
         id="grade-target-section"
-        className="bg-[#111114]/80 backdrop-blur-xl border border-white/10 rounded-2xl p-6"
+        className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-6"
       >
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-zinc-950 border border-white/10 rounded-xl text-cyan-400">
+            <div className="p-2 bg-zinc-950 border border-white/10 rounded-xl text-purple-400">
               <Calculator className="h-5 w-5" />
             </div>
             <div>
-              <div className="text-[11px] font-mono text-cyan-400">Grade Protection Calculator</div>
+              <div className="text-[11px] font-mono text-purple-400">Grade Protection Calculator</div>
               <h2 className="font-display text-base font-bold text-white tracking-tight">
                 Final Exam Target Score Estimator
               </h2>
@@ -376,7 +376,7 @@ export default function MaterialUploader({
               <div
                 className={`font-mono text-xl font-bold tabular-nums ${
                   calcResult.needed > 100
-                    ? "text-rose-400"
+                    ? "text-red-400"
                     : calcResult.needed > 90
                     ? "text-amber-400"
                     : "text-emerald-400"
@@ -413,7 +413,7 @@ export default function MaterialUploader({
                   max="100"
                   value={currentGrade}
                   onChange={(e) => setCurrentGrade(Number(e.target.value))}
-                  className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                  className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-purple-400"
                 />
               </div>
 
@@ -431,7 +431,7 @@ export default function MaterialUploader({
                   max="50"
                   value={finalWeight}
                   onChange={(e) => setFinalWeight(Number(e.target.value))}
-                  className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                  className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-purple-400"
                 />
               </div>
 
@@ -457,7 +457,7 @@ export default function MaterialUploader({
             <div
               className={`p-4 rounded-xl border flex items-start gap-3 ${
                 calcResult.needed > 100
-                  ? "bg-rose-950/30 border-rose-500/40 text-rose-200"
+                  ? "bg-red-950/30 border-red-500/40 text-red-200"
                   : calcResult.needed > 90
                   ? "bg-amber-950/30 border-amber-500/40 text-amber-200"
                   : "bg-emerald-950/30 border-emerald-400/40 text-emerald-200"
@@ -466,7 +466,7 @@ export default function MaterialUploader({
               {calcResult.needed > 90 ? (
                 <AlertTriangle
                   className={`h-4 w-4 shrink-0 mt-0.5 ${
-                    calcResult.needed > 100 ? "text-rose-400" : "text-amber-400"
+                    calcResult.needed > 100 ? "text-red-400" : "text-amber-400"
                   }`}
                 />
               ) : (
@@ -484,16 +484,16 @@ export default function MaterialUploader({
       {/* Course Study Deck & Input-to-Quiz Studio */}
       <section
         id="material-uploader-card"
-        className="bg-[#111114]/80 backdrop-blur-xl border border-white/10 rounded-2xl overflow-hidden"
+        className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl overflow-hidden"
       >
         <div className="px-6 py-7 border-b border-white/10 bg-zinc-950/60">
           <div className="space-y-1.5">
-            <div className="flex items-center gap-2 text-xs font-mono text-cyan-400">
+            <div className="flex items-center gap-2 text-xs font-mono text-purple-400">
               <Target className="h-4 w-4" />
-              <span>Input-to-Quiz &amp; D&apos;Evelyn High School Catalog</span>
+              <span>Bozz GPT Note Ingestion &amp; D&apos;Evelyn High School Catalog</span>
             </div>
             <h2 className="font-display text-xl md:text-2xl font-extrabold text-white tracking-tight">
-              Build Predictive Finals Deck &amp; FSRS Queue
+              Build Predictive Exam Deck &amp; FSRS Queue
             </h2>
             <p className="text-xs sm:text-sm text-zinc-400 max-w-2xl leading-relaxed">
               Select from all {PRESET_COURSES.length} D&apos;Evelyn Jr./Sr. High School classes across every department and unit, paste raw lecture notes or textbook excerpts, or attach a teacher review PDF.
@@ -523,7 +523,7 @@ export default function MaterialUploader({
                 value={courseCode}
                 onChange={(e) => handleCustomCodeChange(e.target.value)}
                 placeholder="Type any code (e.g. MATH_PRECALC, 10157H05012, SCI_CHEM_H, ENG10, CIV10)"
-                className="w-full px-4 py-3 bg-zinc-950 border border-white/10 focus:border-cyan-400 focus:outline-none rounded-xl font-mono text-sm text-white placeholder:font-sans placeholder:text-zinc-500"
+                className="w-full px-4 py-3 bg-zinc-950 border border-white/10 focus:border-purple-400 focus:outline-none rounded-xl font-mono text-sm text-white placeholder:font-sans placeholder:text-zinc-500"
               />
             </div>
 
@@ -561,7 +561,7 @@ export default function MaterialUploader({
                   value={catalogSearch}
                   onChange={(e) => setCatalogSearch(e.target.value)}
                   placeholder="Filter classes or units..."
-                  className="w-full pl-8 pr-8 py-2 bg-zinc-950 border border-white/10 focus:border-cyan-400 rounded-lg text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none"
+                  className="w-full pl-8 pr-8 py-2 bg-zinc-950 border border-white/10 focus:border-purple-400 rounded-lg text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none"
                 />
                 {catalogSearch && (
                   <button
@@ -587,7 +587,7 @@ export default function MaterialUploader({
                     onClick={() => setSelectedDepartment(dept)}
                     className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 tabular-nums ${
                       active
-                        ? "bg-cyan-400 text-zinc-950"
+                        ? "bg-purple-500 text-white"
                         : "text-zinc-400 hover:text-white hover:bg-zinc-900"
                     }`}
                   >
@@ -608,7 +608,7 @@ export default function MaterialUploader({
                     setCatalogSearch("");
                     setSelectedDepartment("All");
                   }}
-                  className="text-xs font-semibold text-cyan-400 hover:text-cyan-300 cursor-pointer"
+                  className="text-xs font-semibold text-purple-400 hover:text-purple-300 cursor-pointer"
                 >
                   Reset filters
                 </button>
@@ -624,13 +624,13 @@ export default function MaterialUploader({
                       onClick={() => handleSelectPreset(course)}
                       className={`text-left p-4 rounded-xl border transition-colors flex flex-col justify-between cursor-pointer ${
                         isSelected
-                          ? "border-cyan-400 bg-cyan-400/10"
+                          ? "border-purple-400 bg-purple-500/10"
                           : "border-white/10 bg-zinc-950/75 hover:border-white/25 hover:bg-zinc-900"
                       }`}
                     >
                       <div className="space-y-1.5">
                         <div className="flex items-center gap-1.5 text-[11px] font-mono text-zinc-400 tabular-nums">
-                          <span className={isSelected ? "text-cyan-300 font-semibold" : "text-zinc-300 font-semibold"}>
+                          <span className={isSelected ? "text-purple-300 font-semibold" : "text-zinc-300 font-semibold"}>
                             {course.code}
                           </span>
                           <span className="text-zinc-600">·</span>
@@ -660,7 +660,7 @@ export default function MaterialUploader({
             <div className="bg-zinc-950/75 border border-white/10 rounded-xl p-5 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
                 <div className="flex items-start gap-2.5">
-                  <BookOpen className="h-4 w-4 text-cyan-400 shrink-0 mt-0.5" />
+                  <BookOpen className="h-4 w-4 text-purple-400 shrink-0 mt-0.5" />
                   <div>
                     <h3 className="text-xs font-bold text-white">
                       {selectedPreset ? selectedPreset.name : deduceCourse(courseCode).name} — Course Units
@@ -675,7 +675,7 @@ export default function MaterialUploader({
                   <button
                     type="button"
                     onClick={selectAllUnits}
-                    className="px-2.5 py-1 text-[11px] font-mono font-semibold text-cyan-400 hover:text-cyan-300 bg-zinc-900 border border-white/10 rounded-md cursor-pointer whitespace-nowrap"
+                    className="px-2.5 py-1 text-[11px] font-mono font-semibold text-purple-400 hover:text-purple-300 bg-zinc-900 border border-white/10 rounded-md cursor-pointer whitespace-nowrap"
                   >
                     Select All
                   </button>
@@ -699,12 +699,12 @@ export default function MaterialUploader({
                       onClick={() => toggleUnit(unit)}
                       className={`text-left px-3 py-2.5 rounded-lg border text-xs flex items-start gap-2.5 transition-colors cursor-pointer ${
                         checked
-                          ? "bg-cyan-400/10 border-cyan-400/40 text-zinc-100"
+                          ? "bg-purple-500/10 border-purple-400/45 text-zinc-100"
                           : "bg-zinc-900/50 border-white/10 text-zinc-400 hover:border-white/25"
                       }`}
                     >
                       {checked ? (
-                        <CheckSquare className="h-4 w-4 text-cyan-400 shrink-0 mt-0.5" />
+                        <CheckSquare className="h-4 w-4 text-purple-400 shrink-0 mt-0.5" />
                       ) : (
                         <Square className="h-4 w-4 text-zinc-600 shrink-0 mt-0.5" />
                       )}
@@ -742,14 +742,14 @@ export default function MaterialUploader({
               <span className="text-xs font-semibold text-zinc-200">
                 4. Teacher Review Sheet PDF (Optional)
               </span>
-              <div className="border border-white/15 hover:border-cyan-400/70 bg-zinc-950/75 hover:bg-zinc-900 rounded-xl p-4 transition-colors text-center relative cursor-pointer group flex-1 flex flex-col items-center justify-center">
+              <div className="border border-white/15 hover:border-purple-400/70 bg-zinc-950/75 hover:bg-zinc-900 rounded-xl p-4 transition-colors text-center relative cursor-pointer group flex-1 flex flex-col items-center justify-center">
                 <input
                   type="file"
                   accept=".pdf,text/plain,application/pdf"
                   onChange={handleFileChange}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                 />
-                <div className="p-2 bg-zinc-900 border border-white/10 rounded-lg text-cyan-400 mb-2">
+                <div className="p-2 bg-zinc-900 border border-white/10 rounded-lg text-purple-400 mb-2">
                   <UploadCloud className="h-5 w-5" />
                 </div>
                 <div className="text-xs font-bold text-zinc-200">Drop PDF or Click to Browse</div>
@@ -768,7 +768,7 @@ export default function MaterialUploader({
                   <button
                     type="button"
                     onClick={() => setAttachedFile(null)}
-                    className="text-zinc-400 hover:text-rose-400 p-1 cursor-pointer"
+                    className="text-zinc-400 hover:text-red-400 p-1 cursor-pointer"
                   >
                     <X className="h-4 w-4" />
                   </button>
@@ -787,7 +787,7 @@ export default function MaterialUploader({
               type="text"
               value={schoolName}
               onChange={(e) => setSchoolName(e.target.value)}
-              className="w-full md:max-w-xs px-3.5 py-2.5 bg-zinc-950 border border-white/10 focus:border-cyan-400 rounded-xl focus:outline-none text-xs font-medium text-white"
+              className="w-full md:max-w-xs px-3.5 py-2.5 bg-zinc-950 border border-white/10 focus:border-purple-400 rounded-xl focus:outline-none text-xs font-medium text-white"
             />
           </div>
 
@@ -834,17 +834,17 @@ export default function MaterialUploader({
           {error && (
             <div
               id="uploader-error-alert"
-              className="p-4 bg-rose-950/40 border border-rose-500/40 rounded-xl text-xs font-medium text-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+              className="p-4 bg-red-950/40 border border-red-500/40 rounded-xl text-xs font-medium text-red-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
             >
               <div className="flex items-start gap-2.5">
-                <AlertCircle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
+                <AlertCircle className="h-4 w-4 text-red-400 shrink-0 mt-0.5" />
                 <span className="leading-relaxed">{error}</span>
               </div>
               <button
                 type="button"
                 onClick={runGeneration}
                 disabled={isLoading}
-                className="px-3.5 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/50 text-rose-100 font-semibold rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                className="px-3.5 py-1.5 bg-red-500/20 hover:bg-red-500/30 border border-red-500/50 text-red-100 font-semibold rounded-lg cursor-pointer whitespace-nowrap shrink-0"
               >
                 Try Again
               </button>

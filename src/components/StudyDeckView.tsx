@@ -629,10 +629,10 @@ export default function StudyDeckView({
         <button
           type="button"
           onClick={onBack}
-          className="inline-flex items-center gap-2 text-xs font-semibold text-zinc-200 bg-[#111114] hover:bg-zinc-900 border border-white/10 px-4 py-2 rounded-xl transition-colors cursor-pointer whitespace-nowrap"
+          className="inline-flex items-center gap-2 text-xs font-semibold text-zinc-200 bg-[#0B0B10] hover:bg-zinc-900 border border-white/10 px-4 py-2 rounded-xl transition-colors cursor-pointer whitespace-nowrap"
         >
-          <ChevronLeft className="h-4 w-4 text-cyan-400" />
-          <span>Back to Deck Studio</span>
+          <ChevronLeft className="h-4 w-4 text-purple-400" />
+          <span>Back</span>
         </button>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -640,9 +640,9 @@ export default function StudyDeckView({
             <button
               type="button"
               onClick={onToggleRedBlueTint}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#111114] border border-white/10 text-xs font-mono text-zinc-300 hover:text-white cursor-pointer whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#0B0B10] border border-white/10 text-xs font-mono text-zinc-300 hover:text-white cursor-pointer whitespace-nowrap"
             >
-              <Palette className="h-3.5 w-3.5 text-cyan-400" />
+              <Palette className="h-3.5 w-3.5 text-purple-400" />
               <span>{redBlueMemoryTint ? "Red/Blue Tint: On" : "Red/Blue Tint: Off"}</span>
             </button>
           )}
@@ -650,16 +650,16 @@ export default function StudyDeckView({
             <>
               <button
                 type="button"
-                onClick={() => onNavigateModule("royale")}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#111114] border border-white/10 text-xs font-mono text-emerald-400 hover:border-emerald-400/50 cursor-pointer whitespace-nowrap"
+                onClick={() => onNavigateModule("boss")}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#0B0B10] border border-purple-500/40 text-xs font-mono text-purple-300 hover:border-purple-400 cursor-pointer whitespace-nowrap"
               >
                 <Swords className="h-3.5 w-3.5" />
-                <span>Weakness Royale</span>
+                <span>Boss Battle</span>
               </button>
               <button
                 type="button"
                 onClick={() => onNavigateModule("map")}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#111114] border border-white/10 text-xs font-mono text-cyan-400 hover:border-cyan-400/50 cursor-pointer whitespace-nowrap"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#0B0B10] border border-white/10 text-xs font-mono text-emerald-400 hover:border-emerald-400/50 cursor-pointer whitespace-nowrap"
               >
                 <GitBranch className="h-3.5 w-3.5" />
                 <span>Concept Map</span>
@@ -670,12 +670,12 @@ export default function StudyDeckView({
       </div>
 
       {/* Main Study Deck Container */}
-      <div className="bg-[#111114]/80 backdrop-blur-xl rounded-2xl border border-white/10 overflow-hidden">
+      <div className="bg-[#0B0B10]/85 backdrop-blur-2xl rounded-2xl border border-white/10 overflow-hidden">
         {/* Course Deck Banner */}
         <div className="bg-zinc-950/75 border-b border-white/10 p-6 md:p-8">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-5">
             <div className="space-y-2">
-              <div className="flex items-center gap-2 text-xs font-mono text-cyan-400">
+              <div className="flex items-center gap-2 text-xs font-mono text-purple-400">
                 <span className="font-semibold">{deck.courseCode}</span>
                 <span className="text-zinc-600">·</span>
                 <span className="text-zinc-400 tabular-nums">
@@ -705,7 +705,7 @@ export default function StudyDeckView({
             onClick={() => setActiveTab("summary")}
             className={`flex items-center gap-2 px-5 py-4 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
               activeTab === "summary"
-                ? "bg-zinc-900/70 text-cyan-400 border-cyan-400"
+                ? "bg-zinc-900/70 text-purple-400 border-purple-400"
                 : "text-zinc-400 border-transparent hover:text-white"
             }`}
           >
@@ -719,7 +719,7 @@ export default function StudyDeckView({
             onClick={() => setActiveTab("timeline")}
             className={`flex items-center gap-2 px-5 py-4 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
               activeTab === "timeline"
-                ? "bg-zinc-900/70 text-cyan-400 border-cyan-400"
+                ? "bg-zinc-900/70 text-purple-400 border-purple-400"
                 : "text-zinc-400 border-transparent hover:text-white"
             }`}
           >
@@ -733,7 +733,7 @@ export default function StudyDeckView({
             onClick={() => setActiveTab("flashcards")}
             className={`flex items-center gap-2 px-5 py-4 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
               activeTab === "flashcards"
-                ? "bg-zinc-900/70 text-cyan-400 border-cyan-400"
+                ? "bg-zinc-900/70 text-purple-400 border-purple-400"
                 : "text-zinc-400 border-transparent hover:text-white"
             }`}
           >
@@ -787,7 +787,7 @@ export default function StudyDeckView({
                   <span className="inline-flex items-center gap-1 text-emerald-400">
                     <Check className="h-3.5 w-3.5" /> FSRS Stability Tracking
                   </span>
-                  <span className="inline-flex items-center gap-1 text-cyan-400">
+                  <span className="inline-flex items-center gap-1 text-purple-400">
                     <Check className="h-3.5 w-3.5" /> Red/Blue Visual Encoding
                   </span>
                 </div>
@@ -800,7 +800,7 @@ export default function StudyDeckView({
                 </div>
                 <div className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400 transition-all duration-300 rounded-full"
+                    className="h-full bg-gradient-to-r from-purple-500 to-emerald-400 transition-all duration-300 rounded-full"
                     style={{ width: `${calculatedMemoryPct}%` }}
                   />
                 </div>
@@ -1052,7 +1052,7 @@ export default function StudyDeckView({
             <div id="quiz-tab-content" className="space-y-6">
               <div className="bg-zinc-950 border border-white/10 rounded-2xl p-5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-5">
                 <div className="space-y-1 text-left">
-                  <div className="flex flex-wrap items-center gap-2 text-xs font-mono text-cyan-400">
+                  <div className="flex flex-wrap items-center gap-2 text-xs font-mono text-purple-400">
                     <span>Interactive Mock Final Exam</span>
                     <span className="text-zinc-600">·</span>
                     <span className="text-zinc-400">10 Questions per Set</span>
@@ -1074,7 +1074,7 @@ export default function StudyDeckView({
                   <div className="text-left">
                     <div className="text-[10px] text-zinc-400">Progress</div>
                     <div className={`text-sm font-bold ${
-                      Object.keys(matchingAnswers).length === organizedQuiz.length ? "text-emerald-400" : "text-cyan-400"
+                      Object.keys(matchingAnswers).length === organizedQuiz.length ? "text-emerald-400" : "text-purple-400"
                     }`}>
                       {organizedQuiz.length > 0 ? Math.round((Object.keys(matchingAnswers).length / organizedQuiz.length) * 100) : 0}%
                     </div>
@@ -1125,7 +1125,7 @@ export default function StudyDeckView({
                         onClick={() => handleSetSectionIndex(sectionIndex)}
                         className={`px-3 py-2 text-xs font-semibold rounded-lg border transition-colors flex items-center gap-2 cursor-pointer whitespace-nowrap tabular-nums ${
                           isCurrent
-                            ? "bg-cyan-400 text-zinc-950 border-cyan-400 font-bold"
+                            ? "bg-purple-500 text-white border-purple-500 font-bold"
                             : matchedCount === end - start + 1
                             ? "bg-emerald-950/40 border-emerald-400/50 text-emerald-300"
                             : "bg-zinc-900 border-white/10 hover:border-white/30 text-zinc-200"
@@ -1133,7 +1133,7 @@ export default function StudyDeckView({
                       >
                         <span>Set {sectionIndex + 1} ({start}-{end})</span>
                         {matchedCount > 0 && (
-                          <span className={`text-[10px] font-mono font-bold ${isCurrent ? "text-zinc-950/80" : "text-zinc-400"}`}>
+                          <span className={`text-[10px] font-mono font-bold ${isCurrent ? "text-white/80" : "text-zinc-400"}`}>
                             {matchedCount}/{end - start + 1}
                           </span>
                         )}
@@ -1166,7 +1166,7 @@ export default function StudyDeckView({
                             const isCurrentMatched = matchingAnswers[absIdx] !== undefined;
                             let btnStyle = "bg-zinc-950 text-zinc-300 border-white/15 hover:border-white/40";
                             if (isCurrentActive) {
-                              btnStyle = "bg-cyan-400 text-zinc-950 border-cyan-400 font-bold";
+                              btnStyle = "bg-purple-500 text-white border-purple-500 font-bold";
                             } else if (isCurrentMatched) {
                               btnStyle = "bg-emerald-500 text-zinc-950 border-emerald-400 font-bold";
                             }
@@ -1561,12 +1561,12 @@ export default function StudyDeckView({
                           type="button"
                           onClick={handleGenerateMoreQuestions}
                           disabled={isGeneratingMore}
-                          className="w-full inline-flex items-center justify-center gap-2 py-3 bg-cyan-400 hover:bg-cyan-300 font-bold text-zinc-950 text-xs rounded-xl cursor-pointer disabled:opacity-50"
+                          className="w-full inline-flex items-center justify-center gap-2 py-3 bg-purple-500 hover:bg-purple-400 font-bold text-white text-xs rounded-xl cursor-pointer disabled:opacity-50"
                         >
                           {isGeneratingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                           <span>{isGeneratingMore ? "Generating 25 Questions..." : "Generate 25 More Questions (AI)"}</span>
                         </button>
-                        {generatorError && <p className="text-[11px] text-rose-400">{generatorError}</p>}
+                        {generatorError && <p className="text-[11px] text-red-400">{generatorError}</p>}
                       </div>
                     )}
                   </div>

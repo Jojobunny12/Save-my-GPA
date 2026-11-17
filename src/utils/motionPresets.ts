@@ -75,3 +75,10 @@ export const BUTTON_TAP = {
   scale: 0.97,
   transition: { duration: 0.08 },
 };
+
+export const SCREEN_SHAKE = {
+  x: [0, -8, 8, -5, 5, -2, 0],
+  y: [0, 3, -3, 2, -2, 0, 0],
+  transition: { duration: 0.34 },
+};
+
