@@ -139,11 +139,22 @@ function parseGeminiJson(rawText: string): any {
   return JSON.parse(cleaned);
 }
 
+type AssessmentTierValue = "definition" | "why_how" | "ap_stimulus";
+
+function normalizeTier(rawTier: any, idx: number): AssessmentTierValue {
+  if (rawTier === "definition" || rawTier === "why_how" || rawTier === "ap_stimulus") {
+    return rawTier;
+  }
+  return idx % 3 === 1 ? "why_how" : idx % 3 === 2 ? "ap_stimulus" : "definition";
+}
+
 interface NormalizedQuizItem {
   question: string;
   options: string[];
   correctIndex: number;
   explanation: string;
+  unitTag?: string;
+  tier?: AssessmentTierValue;
 }
 
 function normalizeQuizItems(rawQuiz: any[], targetCount = 25): NormalizedQuizItem[] {
@@ -181,6 +192,8 @@ function normalizeQuizItems(rawQuiz: any[], targetCount = 25): NormalizedQuizIte
       options: opts,
       correctIndex,
       explanation: expText || "Review the corresponding unit principle and verify your work step by step.",
+      unitTag: typeof item?.unitTag === "string" && item.unitTag.trim() ? item.unitTag.trim() : undefined,
+      tier: normalizeTier(item?.tier, cleaned.length),
     });
 
     if (cleaned.length >= targetCount) break;
@@ -229,7 +242,12 @@ function validateAndNormalizeDeck(payload: any) {
   const flashcards = Array.isArray(payload.flashcards)
     ? payload.flashcards
         .filter((f: any) => typeof f?.question === "string" && typeof f?.answer === "string" && f.question.trim() && f.answer.trim())
-        .map((f: any) => ({ question: f.question.trim(), answer: f.answer.trim() }))
+        .map((f: any, idx: number) => ({
+          question: f.question.trim(),
+          answer: f.answer.trim(),
+          unitTag: typeof f?.unitTag === "string" && f.unitTag.trim() ? f.unitTag.trim() : undefined,
+          tier: normalizeTier(f?.tier, idx),
+        }))
     : [];
 
   if (flashcards.length < 8) {
@@ -450,24 +468,34 @@ app.post("/api/analyze-finals-material", async (req, res) => {
       fileMimeType,
     } = req.body;
 
-    if (!courseCode) {
+    const cleanPastedText = typeof pastedText === "string" ? pastedText.trim() : "";
+    const resolvedCourseCode =
+      typeof courseCode === "string" && courseCode.trim()
+        ? courseCode.trim()
+        : cleanPastedText || fileBase64
+        ? "CUSTOM_NOTES"
+        : "";
+
+    if (!resolvedCourseCode) {
       if (ndjson) {
-        ndjson.finishError(400, "courseCode is required.");
+        ndjson.finishError(400, "Select a D'Evelyn course, enter a course code, or paste your class notes.");
       } else {
-        res.status(400).json({ error: "courseCode is required." });
+        res.status(400).json({ error: "Select a D'Evelyn course, enter a course code, or paste your class notes." });
       }
       return;
     }
 
     const activeSchool = schoolName || "D'Evelyn High School";
-    const activeCourseName = courseName || `Course ${courseCode}`;
+    const activeCourseName = courseName || (resolvedCourseCode === "CUSTOM_NOTES" ? "Custom Lecture & Notes Study Deck" : `Course ${resolvedCourseCode}`);
     const unitsList: string[] = Array.isArray(units) ? units : [];
     const formattedUnits =
       unitsList.length > 0
         ? unitsList.map((u, idx) => `  ${idx + 1}. ${u}`).join("\n")
+        : cleanPastedText
+        ? "Derive distinct unit/topic labels directly from the student's pasted syllabus/notes."
         : "Cover the complete cumulative D'Evelyn syllabus for this course.";
 
-    const systemPrompt = `You are a veteran D'Evelyn Jr./Sr. High School department chair and AP/Honors exam writer designing an elite finals preparation deck for "${activeCourseName}" (${courseCode}, Department: ${department || "Academic"}) at "${activeSchool}".
+    const systemPrompt = `You are a veteran D'Evelyn Jr./Sr. High School department chair and AP/Honors exam writer designing an elite finals preparation deck for "${activeCourseName}" (${resolvedCourseCode}, Department: ${department || "Academic"}) at "${activeSchool}".
 
 STRICT SUBJECT LOCK:
 - Every single flashcard, cheat sheet section, study tip, timeline day, and ALL 25 mock exam questions MUST strictly belong to "${activeCourseName}" (${department || "this exact subject"}).
@@ -475,11 +503,16 @@ STRICT SUBJECT LOCK:
 
 PREDICTIVE D'EVELYN FINALS QUALITY STANDARD:
 - Ground every item in the exact D'Evelyn textbooks, problem types, proofs, theorems, primary sources, or labs listed below:
-  - Course Overview & Texts: ${curriculumDetails || "Official D'Evelyn honors/cumulative syllabus"}
+  - Course Overview & Texts: ${curriculumDetails || "Official D'Evelyn honors/cumulative syllabus & pasted class notes"}
   - How Finals Are Tested: ${examFocus || "Cumulative honors/AP rigorous examination"}
   - Core Strategy: ${studyStrategy || "Active retrieval and rigorous problem execution"}
 - Target Curriculum Units to Predict & Cover Evenly:
 ${formattedUnits}
+
+COGNITIVE TIERS & UNIT TAGGING:
+- Tag every flashcard and quiz question with:
+  - "unitTag": the concise unit or chapter name it tests.
+  - "tier": balanced across "definition" (rapid-fire precision terms/formulas), "why_how" (conceptual mechanism & causation prompts), and "ap_stimulus" (AP-style problem/excerpt/document stimulus).
 
 FLASHCARD REQUIREMENTS (14 to 16 cards):
 - Do NOT write vague glossary definitions or generic study-habit advice.
@@ -487,7 +520,7 @@ FLASHCARD REQUIREMENTS (14 to 16 cards):
 - Keep each card concise: front question + crisp answer first followed by the key formula, condition, or pitfall.
 
 MOCK EXAM REQUIREMENTS (EXACTLY 25 questions):
-- Distribute the 25 questions evenly across ALL listed Target Curriculum Units.
+- Distribute the 25 questions evenly across ALL listed Target Curriculum Units and mix tiers ("definition", "why_how", "ap_stimulus").
 - Write authentic, challenging, textbook-accurate questions with realistic numbers, equations, historical arguments, literary excerpts, language conjugations, or code snippets.
 - MATCHING POOL UNIQUENESS CONSTRAINT: Questions are grouped into sets of 10 (Q1-Q10, Q11-Q20, Q21-Q25) where students match questions to correct answer cards. Within each set of 10 questions (1-10, 11-20, 21-25), ALL 10 correct answer choices MUST be completely distinct values/phrases (never allow two questions in the same 10-question set to have identical correct answer strings like both having "1", "0", or "True").
 - Provide 4 distinct options formatted strictly as ["A) ...", "B) ...", "C) ...", "D) ..."], with correctIndex in 0..3 and 1 crisp, direct sentence explaining the solution.
@@ -501,11 +534,11 @@ Student Context: ${additionalNotes || "Cumulative semester final review"}
 Return ONLY valid JSON matching the schema with:
 - summary: { title, curriculumExplanation, topTipsForFinal (4 subject-specific tactics), synthesizedNotesParagraph, coreCheatSheetMarkdown (dense unit-by-unit formulas/theorems/dates cheat sheet) }
 - timeline: 5 concise days mapped directly to the selected units
-- flashcards: 14 to 16 predictive D'Evelyn exam flashcards
-- quiz: EXACTLY 25 unique cumulative multiple-choice questions`;
+- flashcards: 14 to 16 predictive D'Evelyn exam flashcards (each with question, answer, unitTag, tier)
+- quiz: EXACTLY 25 unique cumulative multiple-choice questions (each with question, options, correctIndex, explanation, unitTag, tier)`;
 
-    const promptMessage = `Build the complete predictive D'Evelyn finals study deck for ${activeCourseName} (${courseCode}). Cover every listed unit across 14–16 predictive flashcards, a dense unit-by-unit cheat sheet, a 5-day schedule, and EXACTLY 25 unique multiple-choice questions with distinct correct answers per 10-question set.${
-      pastedText ? `\n\nReference material:\n"""\n${String(pastedText).slice(0, 15000)}\n"""` : ""
+    const promptMessage = `Build the complete predictive D'Evelyn finals study deck for ${activeCourseName} (${resolvedCourseCode}). Cover every listed unit across 14–16 predictive flashcards, a dense unit-by-unit cheat sheet, a 5-day schedule, and EXACTLY 25 unique multiple-choice questions with distinct correct answers per 10-question set.${
+      cleanPastedText ? `\n\nStudent Lecture Notes / Syllabus / Excerpt:\n"""\n${cleanPastedText.slice(0, 18000)}\n"""` : ""
     }`;
 
     const contents: any[] = [];
@@ -580,6 +613,8 @@ Return ONLY valid JSON matching the schema with:
                     properties: {
                       question: { type: Type.STRING },
                       answer: { type: Type.STRING },
+                      unitTag: { type: Type.STRING },
+                      tier: { type: Type.STRING },
                     },
                   },
                 },
@@ -596,6 +631,8 @@ Return ONLY valid JSON matching the schema with:
                       },
                       correctIndex: { type: Type.INTEGER },
                       explanation: { type: Type.STRING },
+                      unitTag: { type: Type.STRING },
+                      tier: { type: Type.STRING },
                     },
                   },
                 },
@@ -683,6 +720,7 @@ ${curriculumDetails ? `Textbook & Syllabus Context: ${curriculumDetails}\n` : ""
 STRICT RULES:
 - Every question MUST test real, challenging subject matter from "${activeCourseName}" and predict actual honors/AP/Saxon exam items.
 - Do NOT write generic study-tip questions or drift into any other subject.
+- Tag each item with "unitTag" and "tier" ("definition", "why_how", or "ap_stimulus").
 - MATCHING POOL UNIQUENESS CONSTRAINT: Within every group of 10 questions (Q1-Q10, Q11-Q20, Q21-Q25), ALL 10 correct answer strings MUST be completely distinct values/phrases so no two questions in the same set share the same answer text.
 - Format options strictly as ["A) ...", "B) ...", "C) ...", "D) ..."] with correctIndex in 0..3 and 1 crisp, direct sentence explaining the solution.
 - Use clean Unicode math only (no raw LaTeX $$, \\frac, \\sqrt).
@@ -725,6 +763,8 @@ ${(existingQuestions || []).map((q: any) => `- ${q.question}`).slice(0, 60).join
                       },
                       correctIndex: { type: Type.INTEGER },
                       explanation: { type: Type.STRING },
+                      unitTag: { type: Type.STRING },
+                      tier: { type: Type.STRING },
                     },
                   },
                 },
@@ -772,6 +812,365 @@ ${(existingQuestions || []).map((q: any) => `- ${q.question}`).slice(0, 60).join
     } else {
       res.status(status).json({ error: message });
     }
+  }
+});
+
+// REST API endpoint: Feynman Plain-English Diagnostic Grader
+app.post("/api/feynman-grade", async (req, res) => {
+  try {
+    const { courseCode, courseName, conceptQuestion, modelAnswer, studentExplanation } = req.body || {};
+    if (!conceptQuestion || !studentExplanation || !String(studentExplanation).trim()) {
+      res.status(400).json({ error: "conceptQuestion and a non-empty studentExplanation are required." });
+      return;
+    }
+
+    const systemInstruction = `You are an elite D'Evelyn Jr./Sr. High School honors & AP examiner grading a student's Feynman plain-English explanation for "${courseName || courseCode || "Academic Course"}".
+Evaluate rigorously for logical precision, conceptual nuance, causal accuracy, and missing boundary conditions or exam traps. Never accept hand-wavy buzzwords without mechanistic explanation. Use clean Unicode math only (never raw LaTeX).`;
+
+    const userPrompt = `Prompt / Concept:
+${conceptQuestion}
+
+Reference Standard:
+${modelAnswer || "Evaluate based on exact honors/AP curriculum standards."}
+
+Student's Plain-English Feynman Explanation:
+${String(studentExplanation).trim()}
+
+Return strict JSON grading logicalPrecision (0-100), nuanceScore (0-100), overallScore (0-100), verdict ("Mastered" | "Partial" | "Needs Review"), 2-3 specific strengths, 2-3 concrete blindSpots, and a crisp refinedModelExplanation.`;
+
+    const evaluation = await executeGeminiWithRetry(async (aiInstance, entry, attemptLabel) => {
+      const response = await withTimeout(
+        aiInstance.models.generateContent({
+          model: entry.model,
+          contents: userPrompt,
+          config: {
+            systemInstruction,
+            thinkingConfig: { thinkingLevel: entry.thinkingLevel },
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              required: [
+                "overallScore",
+                "logicalPrecision",
+                "nuanceScore",
+                "verdict",
+                "strengths",
+                "blindSpots",
+                "refinedModelExplanation",
+              ],
+              properties: {
+                overallScore: { type: Type.INTEGER },
+                logicalPrecision: { type: Type.INTEGER },
+                nuanceScore: { type: Type.INTEGER },
+                verdict: { type: Type.STRING },
+                strengths: { type: Type.ARRAY, items: { type: Type.STRING } },
+                blindSpots: { type: Type.ARRAY, items: { type: Type.STRING } },
+                refinedModelExplanation: { type: Type.STRING },
+              },
+            },
+          },
+        }),
+        entry.totalTimeoutMs,
+        `${attemptLabel}:feynman`
+      );
+
+      const text = response.text;
+      if (!text) throw new Error("Empty Feynman evaluation from Gemini.");
+      const parsed = parseGeminiJson(text);
+      const overall = Math.min(100, Math.max(0, Math.round(Number(parsed.overallScore || 0))));
+      const verdict =
+        overall >= 85 ? "Mastered" : overall >= 60 ? "Partial" : "Needs Review";
+      return {
+        overallScore: overall,
+        logicalPrecision: Math.min(100, Math.max(0, Math.round(Number(parsed.logicalPrecision || overall)))),
+        nuanceScore: Math.min(100, Math.max(0, Math.round(Number(parsed.nuanceScore || overall)))),
+        verdict,
+        strengths: Array.isArray(parsed.strengths) ? parsed.strengths.map(String).slice(0, 4) : [],
+        blindSpots: Array.isArray(parsed.blindSpots) ? parsed.blindSpots.map(String).slice(0, 4) : [],
+        refinedModelExplanation: String(parsed.refinedModelExplanation || modelAnswer || "").trim(),
+      };
+    });
+
+    res.json(evaluation);
+  } catch (err: any) {
+    console.error("Live AI Feynman grading failed:", err);
+    const { status, message } = extractErrorStatusAndMessage(err);
+    res.status(status).json({ error: message });
+  }
+});
+
+// REST API endpoint: Socratic Seminar Moderator & Thesis Rubric Grader
+app.post("/api/socratic-turn", async (req, res) => {
+  try {
+    const {
+      courseCode,
+      courseName,
+      topicPrompt,
+      thesisStatement,
+      history,
+      studentMessage,
+    } = req.body || {};
+
+    if (!topicPrompt || !studentMessage || !String(studentMessage).trim()) {
+      res.status(400).json({ error: "topicPrompt and studentMessage are required." });
+      return;
+    }
+
+    const formattedHistory = Array.isArray(history)
+      ? history
+          .slice(-8)
+          .map((t: any) => `${t.role === "moderator" ? "MODERATOR" : "STUDENT"}: ${String(t.content || "").trim()}`)
+          .join("\n")
+      : "";
+
+    const systemInstruction = `You are a demanding D'Evelyn Jr./Sr. High School Socratic Seminar & AP Humanities/Liberal Arts moderator for "${courseName || courseCode || "Honors Humanities"}".
+Your role:
+1. Interrogate weak generalizations, unearned claims, anachronisms, or vague phrasing.
+2. Demand concrete textual evidence, historical primary-source specifics, or logical syllogism steps.
+3. Score the student's current argument rigorously on the 4-axis AP/Honors rubric (each 0-25: claimScore, evidenceScore, reasoningScore, counterargumentScore; overallScore 0-100).
+4. Respond with a razor-sharp critique, identify the primary challengeType ("Evidence Demand" | "Counterargument" | "Logical Precision" | "Synthesis"), pose one piercing probingQuestion, note any textualEvidenceCheck gap, and list 2–3 concrete feedbackBullets.`;
+
+    const userPrompt = `Seminar Prompt: ${topicPrompt}
+Working Thesis: ${thesisStatement || "Not stated separately — extract from argument"}
+${formattedHistory ? `\nPrior Exchange:\n${formattedHistory}\n` : ""}
+Latest Student Argument:
+${String(studentMessage).trim()}
+
+Return ONLY JSON matching the schema.`;
+
+    const turnResult = await executeGeminiWithRetry(async (aiInstance, entry, attemptLabel) => {
+      const response = await withTimeout(
+        aiInstance.models.generateContent({
+          model: entry.model,
+          contents: userPrompt,
+          config: {
+            systemInstruction,
+            thinkingConfig: { thinkingLevel: entry.thinkingLevel },
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              required: [
+                "moderatorReply",
+                "challengeType",
+                "probingQuestion",
+                "textualEvidenceCheck",
+                "rubric",
+                "feedbackBullets",
+              ],
+              properties: {
+                moderatorReply: { type: Type.STRING },
+                challengeType: { type: Type.STRING },
+                probingQuestion: { type: Type.STRING },
+                textualEvidenceCheck: { type: Type.STRING },
+                rubric: {
+                  type: Type.OBJECT,
+                  required: [
+                    "claimScore",
+                    "evidenceScore",
+                    "reasoningScore",
+                    "counterargumentScore",
+                    "overallScore",
+                  ],
+                  properties: {
+                    claimScore: { type: Type.INTEGER },
+                    evidenceScore: { type: Type.INTEGER },
+                    reasoningScore: { type: Type.INTEGER },
+                    counterargumentScore: { type: Type.INTEGER },
+                    overallScore: { type: Type.INTEGER },
+                  },
+                },
+                feedbackBullets: { type: Type.ARRAY, items: { type: Type.STRING } },
+              },
+            },
+          },
+        }),
+        entry.totalTimeoutMs,
+        `${attemptLabel}:socratic`
+      );
+
+      const text = response.text;
+      if (!text) throw new Error("Empty Socratic response from Gemini.");
+      const parsed = parseGeminiJson(text);
+
+      const clamp25 = (n: any) => Math.min(25, Math.max(0, Math.round(Number(n || 0))));
+      const claimScore = clamp25(parsed?.rubric?.claimScore);
+      const evidenceScore = clamp25(parsed?.rubric?.evidenceScore);
+      const reasoningScore = clamp25(parsed?.rubric?.reasoningScore);
+      const counterargumentScore = clamp25(parsed?.rubric?.counterargumentScore);
+      const overallScore = claimScore + evidenceScore + reasoningScore + counterargumentScore;
+
+      const validChallenges = [
+        "Evidence Demand",
+        "Counterargument",
+        "Logical Precision",
+        "Synthesis",
+      ] as const;
+      const rawChallenge = String(parsed.challengeType || "");
+      const challengeType = (validChallenges as readonly string[]).includes(rawChallenge)
+        ? rawChallenge
+        : "Evidence Demand";
+
+      return {
+        moderatorReply: String(parsed.moderatorReply || "").trim(),
+        challengeType,
+        probingQuestion: String(parsed.probingQuestion || "").trim(),
+        textualEvidenceCheck: String(parsed.textualEvidenceCheck || "").trim(),
+        rubric: {
+          claimScore,
+          evidenceScore,
+          reasoningScore,
+          counterargumentScore,
+          overallScore,
+        },
+        feedbackBullets: Array.isArray(parsed.feedbackBullets)
+          ? parsed.feedbackBullets.map(String).slice(0, 4)
+          : [],
+      };
+    });
+
+    res.json(turnResult);
+  } catch (err: any) {
+    console.error("Live AI Socratic turn failed:", err);
+    const { status, message } = extractErrorStatusAndMessage(err);
+    res.status(status).json({ error: message });
+  }
+});
+
+// REST API endpoint: Dual-Coding Concept Graph & Chronological Timeline Generator
+app.post("/api/concept-map", async (req, res) => {
+  try {
+    const { courseCode, courseName, units, sourceNotes, cheatSheetMarkdown } = req.body || {};
+    const notesText = String(sourceNotes || cheatSheetMarkdown || "").trim();
+    if (!notesText && !courseName && !courseCode) {
+      res.status(400).json({ error: "Provide a study deck, course name, or raw notes to map." });
+      return;
+    }
+
+    const systemInstruction = `You are a cognitive scientist building a Dual-Coding interactive Concept Graph & Sequential Timeline for "${courseName || courseCode || "Academic Study"}".
+Extract 8 to 10 high-yield conceptual nodes (tier: "core" | "mechanism" | "synthesis") with clean non-overlapping normalized canvas coordinates (x in 10..90, y in 14..86), 8 to 12 directed causal/structural edges ("from", "to", "relation"), and 4 to 6 ordered "timelineEvents" ("sequence", "title", "detail"). Use clean Unicode math only (no LaTeX).`;
+
+    const userPrompt = `Course: ${courseName || courseCode || "Course Material"}
+Units: ${Array.isArray(units) && units.length > 0 ? units.join(" | ") : "Core curriculum"}
+Source Reference:
+"""
+${notesText.slice(0, 12000)}
+"""
+Generate the Dual-Coding Concept Graph JSON.`;
+
+    const graphData = await executeGeminiWithRetry(async (aiInstance, entry, attemptLabel) => {
+      const response = await withTimeout(
+        aiInstance.models.generateContent({
+          model: entry.model,
+          contents: userPrompt,
+          config: {
+            systemInstruction,
+            thinkingConfig: { thinkingLevel: entry.thinkingLevel },
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              required: ["title", "nodes", "edges", "timelineEvents"],
+              properties: {
+                title: { type: Type.STRING },
+                nodes: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    required: ["id", "label", "summary", "unitTag", "tier", "x", "y"],
+                    properties: {
+                      id: { type: Type.STRING },
+                      label: { type: Type.STRING },
+                      summary: { type: Type.STRING },
+                      unitTag: { type: Type.STRING },
+                      tier: { type: Type.STRING },
+                      x: { type: Type.NUMBER },
+                      y: { type: Type.NUMBER },
+                    },
+                  },
+                },
+                edges: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    required: ["from", "to", "relation"],
+                    properties: {
+                      from: { type: Type.STRING },
+                      to: { type: Type.STRING },
+                      relation: { type: Type.STRING },
+                    },
+                  },
+                },
+                timelineEvents: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    required: ["sequence", "title", "detail"],
+                    properties: {
+                      sequence: { type: Type.STRING },
+                      title: { type: Type.STRING },
+                      detail: { type: Type.STRING },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        }),
+        entry.totalTimeoutMs,
+        `${attemptLabel}:concept-map`
+      );
+
+      const text = response.text;
+      if (!text) throw new Error("Empty concept map from Gemini.");
+      const parsed = parseGeminiJson(text);
+      const nodes = Array.isArray(parsed.nodes)
+        ? parsed.nodes.slice(0, 12).map((n: any, idx: number) => ({
+            id: String(n.id || `n${idx + 1}`),
+            label: String(n.label || `Concept ${idx + 1}`).trim(),
+            summary: String(n.summary || "").trim(),
+            unitTag: String(n.unitTag || courseName || "Core Unit").trim(),
+            tier: n.tier === "mechanism" || n.tier === "synthesis" ? n.tier : "core",
+            x: Math.min(88, Math.max(12, Number(n.x || 18 + (idx % 4) * 21))),
+            y: Math.min(85, Math.max(15, Number(n.y || 22 + Math.floor(idx / 4) * 28))),
+          }))
+        : [];
+
+      const validIds = new Set(nodes.map((n: any) => n.id));
+      const edges = Array.isArray(parsed.edges)
+        ? parsed.edges
+            .filter((e: any) => validIds.has(String(e.from)) && validIds.has(String(e.to)) && e.from !== e.to)
+            .slice(0, 16)
+            .map((e: any) => ({
+              from: String(e.from),
+              to: String(e.to),
+              relation: String(e.relation || "connects to").trim(),
+            }))
+        : [];
+
+      const timelineEvents = Array.isArray(parsed.timelineEvents)
+        ? parsed.timelineEvents.slice(0, 8).map((ev: any, idx: number) => ({
+            sequence: String(ev.sequence || `Step ${idx + 1}`).trim(),
+            title: String(ev.title || "").trim(),
+            detail: String(ev.detail || "").trim(),
+          }))
+        : [];
+
+      if (nodes.length < 3) {
+        throw new Error("Concept map returned fewer than 3 nodes.");
+      }
+
+      return {
+        title: String(parsed.title || `${courseName || "Course"} Concept Architecture`).trim(),
+        nodes,
+        edges,
+        timelineEvents,
+      };
+    });
+
+    res.json(graphData);
+  } catch (err: any) {
+    console.error("Live AI concept map generation failed:", err);
+    const { status, message } = extractErrorStatusAndMessage(err);
+    res.status(status).json({ error: message });
   }
 });
 

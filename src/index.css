@@ -3,18 +3,20 @@
 @theme {
   --font-display: "Plus Jakarta Sans", system-ui, sans-serif;
   --font-sans: "DM Sans", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
 }
 
 @layer base {
   html {
     scroll-behavior: smooth;
-    background-color: #090d16;
-    color: #f1f5f9;
+    background-color: #09090b;
+    color: #f4f4f5;
   }
 
   body {
     font-family: var(--font-sans);
+    background-color: #09090b;
+    color: #f4f4f5;
   }
 
   h1, h2, h3, .font-display {
@@ -28,6 +30,32 @@
 
 .balance-text {
   text-wrap: balance;
+}
+
+/* 3D Active Recall Card Flip Utilities */
+.perspective-1200 {
+  perspective: 1200px;
+}
+
+.preserve-3d {
+  transform-style: preserve-3d;
+}
+
+.backface-hidden {
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.rotate-y-180 {
+  transform: rotateY(180deg);
+}
+
+/* Subtle tactical grid texture for obsidian telemetry surfaces */
+.obsidian-grid-bg {
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
+  background-size: 32px 32px;
 }
 
 @media (prefers-reduced-motion: reduce) {

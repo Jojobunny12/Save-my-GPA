@@ -3,16 +3,153 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
-import { StudyDeck } from "./types";
+import React, { useEffect, useMemo, useState } from "react";
+import { motion, AnimatePresence, MotionConfig } from "motion/react";
+import { Download } from "lucide-react";
+import { StudyDeck, WorkspaceRoute } from "./types";
+import { generateOfflineHtml } from "./utils/htmlExporter";
+import {
+  computeExamReadiness,
+  loadPreferences,
+  loadTestDates,
+  savePreferences,
+  saveTestDate,
+  syncDeckToFSRS,
+} from "./utils/fsrsEngine";
+import { PANEL_FADE, SPRING_TACTILE } from "./utils/motionPresets";
+import TelemetryCommandCenter from "./components/TelemetryCommandCenter";
 import MaterialUploader from "./components/MaterialUploader";
 import StudyDeckView from "./components/StudyDeckView";
-import { History, CheckCircle2, ChevronRight, FileText, Trash2, Download, ShieldCheck } from "lucide-react";
-import { generateOfflineHtml } from "./utils/htmlExporter";
+import RecallFeynmanStudio from "./components/RecallFeynmanStudio";
+import WeaknessRoyaleStudio from "./components/WeaknessRoyaleStudio";
+import SocraticArenaStudio from "./components/SocraticArenaStudio";
+import DualCodingVisualizer from "./components/DualCodingVisualizer";
+
+const NAV_ITEMS: Array<{ id: WorkspaceRoute; label: string }> = [
+  { id: "command", label: "Command" },
+  { id: "builder", label: "Deck Studio" },
+  { id: "recall", label: "Recall & Feynman" },
+  { id: "royale", label: "Weakness Royale" },
+  { id: "socratic", label: "Socratic" },
+  { id: "map", label: "Concept Map" },
+];
 
 export default function App() {
-  const [activeDeck, setActiveDeck] = useState<StudyDeck | null>(null);
+  const [route, setRoute] = useState<WorkspaceRoute>("command");
   const [savedDecks, setSavedDecks] = useState<StudyDeck[]>([]);
+  const [activeDeck, setActiveDeck] = useState<StudyDeck | null>(null);
+  const [deckHubOpen, setDeckHubOpen] = useState(false);
+  const [deckHubInitialTab, setDeckHubInitialTab] = useState<
+    "summary" | "timeline" | "flashcards" | "quiz"
+  >("summary");
+  const [royaleSubMode, setRoyaleSubMode] = useState<"royale" | "matching">("royale");
+
+  const [telemetryRevision, setTelemetryRevision] = useState(0);
+  const [redBlueMemoryTint, setRedBlueMemoryTint] = useState<boolean>(
+    () => loadPreferences().redBlueMemoryTint
+  );
+  const [testDatesMap, setTestDatesMap] = useState<Record<string, string>>(() =>
+    loadTestDates()
+  );
+
+  // Hydrate saved decks and seed FSRS concepts on load
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("dev_study_decks");
+      if (stored) {
+        const parsed: StudyDeck[] = JSON.parse(stored);
+        setSavedDecks(parsed);
+        parsed.forEach((d) => syncDeckToFSRS(d));
+        if (parsed.length > 0) {
+          setActiveDeck(parsed[0]);
+        }
+        setTelemetryRevision((r) => r + 1);
+      }
+    } catch (err) {
+      console.error("Failed to load saved decks:", err);
+    }
+  }, []);
+
+  const bumpTelemetry = () => setTelemetryRevision((r) => r + 1);
+
+  const activeTestDate = useMemo(() => {
+    if (activeDeck?.testDate) return activeDeck.testDate;
+    if (activeDeck && testDatesMap[activeDeck.id]) return testDatesMap[activeDeck.id];
+    return testDatesMap.global || "";
+  }, [activeDeck, testDatesMap]);
+
+  const readiness = useMemo(() => {
+    return computeExamReadiness(savedDecks, activeDeck?.id, activeTestDate);
+  }, [savedDecks, activeDeck?.id, activeTestDate, telemetryRevision]);
+
+  const handleToggleRedBlueTint = () => {
+    const next = !redBlueMemoryTint;
+    setRedBlueMemoryTint(next);
+    savePreferences({ redBlueMemoryTint: next });
+  };
+
+  const handleChangeTestDate = (isoDate: string) => {
+    const key = activeDeck ? activeDeck.id : "global";
+    const updatedMap = saveTestDate(key, isoDate);
+    setTestDatesMap(updatedMap);
+
+    if (activeDeck) {
+      const updatedDeck: StudyDeck = { ...activeDeck, testDate: isoDate || undefined };
+      handleUpdateDeck(updatedDeck);
+    }
+    bumpTelemetry();
+  };
+
+  const handleDeckCreated = (deck: StudyDeck) => {
+    syncDeckToFSRS(deck);
+    if (deck.testDate) {
+      setTestDatesMap(saveTestDate(deck.id, deck.testDate));
+    }
+    setActiveDeck(deck);
+    setSavedDecks((prev) => [deck, ...prev.filter((d) => d.id !== deck.id)]);
+    setDeckHubInitialTab("summary");
+    setDeckHubOpen(true);
+    setRoute("builder");
+    bumpTelemetry();
+  };
+
+  const handleUpdateDeck = (updatedDeck: StudyDeck) => {
+    setActiveDeck(updatedDeck);
+    setSavedDecks((prev) => {
+      const updatedList = prev.map((d) => (d.id === updatedDeck.id ? updatedDeck : d));
+      try {
+        localStorage.setItem("dev_study_decks", JSON.stringify(updatedList));
+      } catch (err) {
+        console.error("Failed to update deck in localStorage:", err);
+      }
+      return updatedList;
+    });
+    bumpTelemetry();
+  };
+
+  const handleDeleteDeck = (id: string) => {
+    const updated = savedDecks.filter((d) => d.id !== id);
+    try {
+      localStorage.setItem("dev_study_decks", JSON.stringify(updated));
+    } catch (err) {
+      console.error("Failed to delete deck:", err);
+    }
+    setSavedDecks(updated);
+    if (activeDeck?.id === id) {
+      setActiveDeck(updated[0] || null);
+      setDeckHubOpen(false);
+    }
+    bumpTelemetry();
+  };
+
+  const navigateTo = (nextRoute: WorkspaceRoute) => {
+    setDeckHubOpen(false);
+    if (nextRoute === "royale") {
+      setRoyaleSubMode("royale");
+    }
+    setRoute(nextRoute);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   const downloadStandaloneApp = () => {
     try {
@@ -21,7 +158,7 @@ export default function App() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = "Finals_Study_Companion_Offline.html";
+      link.download = "GPARoyale_Offline_Companion.html";
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -31,271 +168,248 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem("dev_study_decks");
-      if (stored) {
-        setSavedDecks(JSON.parse(stored));
-      }
-    } catch (err) {
-      console.error("Local storage sync failure:", err);
-    }
-  }, [activeDeck]);
-
-  const loadSavedDeck = (deck: StudyDeck) => {
-    setActiveDeck(deck);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  };
-
-  const handleUpdateDeck = (updatedDeck: StudyDeck) => {
-    setActiveDeck(updatedDeck);
-    try {
-      const stored = localStorage.getItem("dev_study_decks");
-      if (stored) {
-        const decks: StudyDeck[] = JSON.parse(stored);
-        const updatedList = decks.map((d) => (d.id === updatedDeck.id ? updatedDeck : d));
-        localStorage.setItem("dev_study_decks", JSON.stringify(updatedList));
-        setSavedDecks(updatedList);
-      }
-    } catch (err) {
-      console.error("Failed to update deck in local storage:", err);
-    }
-  };
-
-  const deleteDeck = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    try {
-      const updated = savedDecks.filter((d) => d.id !== id);
-      localStorage.setItem("dev_study_decks", JSON.stringify(updated));
-      setSavedDecks(updated);
-      if (activeDeck?.id === id) {
-        setActiveDeck(null);
-      }
-    } catch (err) {
-      console.error("Failed to delete local state item:", err);
-    }
-  };
-
-  const clearAllDecks = () => {
-    if (window.confirm("Are you sure you want to clear your study history? This cannot be undone.")) {
-      localStorage.removeItem("dev_study_decks");
-      setSavedDecks([]);
-      setActiveDeck(null);
-    }
-  };
-
   return (
-    <div className="min-h-screen bg-[#090D16] text-slate-100 antialiased font-sans pb-16">
-      {/* Three-Zone Top Navigation */}
-      <header className="bg-[#090D16]/90 backdrop-blur-md border-b border-slate-800/80 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-8">
-          {/* Zone 1: Single Brand Wordmark */}
-          <button
-            type="button"
-            onClick={() => setActiveDeck(null)}
-            className="font-display text-lg font-extrabold tracking-tight text-white hover:text-amber-400 transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 rounded"
-          >
-            Finals Studio
-          </button>
-
-          {/* Zone 2: Clean Single-Line Nav Links */}
-          <nav className="hidden md:flex items-center gap-7 text-sm font-medium text-slate-400">
-            <a
-              href="#grade-target-section"
-              onClick={() => {
-                if (activeDeck) setActiveDeck(null);
-              }}
-              className="hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
-            >
-              GPA Target
-            </a>
-            <a
-              href="#material-uploader-card"
-              onClick={() => {
-                if (activeDeck) setActiveDeck(null);
-              }}
-              className="hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
-            >
-              Deck Builder
-            </a>
-            <a
-              href="#archives-card"
-              onClick={() => {
-                if (activeDeck) setActiveDeck(null);
-              }}
-              className="hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
-            >
-              Saved Decks
-            </a>
-          </nav>
-
-          {/* Zone 3: Primary Header Action */}
-          <div className="flex items-center shrink-0">
+    <MotionConfig reducedMotion="user">
+      <div className="min-h-screen bg-[#09090B] obsidian-grid-bg text-zinc-100 antialiased font-sans pb-16">
+        {/* Three-Zone Tactical Obsidian Top Bar */}
+        <header className="bg-[#09090B]/85 backdrop-blur-xl border-b border-white/10 sticky top-0 z-50">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+            {/* Zone 1: Brand Wordmark */}
             <button
               type="button"
-              onClick={downloadStandaloneApp}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-slate-100 border border-slate-700 hover:border-amber-500/60 font-semibold text-xs rounded-lg transition-all duration-150 cursor-pointer whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
-              title="Download standalone school-safe offline companion containing all preloaded and generated decks"
+              onClick={() => navigateTo("command")}
+              className="font-display text-lg font-extrabold tracking-tight text-white hover:text-cyan-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-baseline gap-1.5"
             >
-              <Download className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-              <span className="hidden sm:inline">Offline Bundle</span>
-              <span className="inline sm:hidden">Offline</span>
+              <span>GPA</span>
+              <span className="text-emerald-400">Royale</span>
             </button>
-          </div>
-        </div>
-      </header>
 
-      {/* Main Workspace */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8">
-        {activeDeck ? (
-          <StudyDeckView deck={activeDeck} onBack={() => setActiveDeck(null)} onUpdateDeck={handleUpdateDeck} />
-        ) : (
-          <div className="space-y-8">
-            {/* Hero Command Panel */}
-            <section className="bg-[#0F172A] border border-slate-800 rounded-2xl p-6 md:p-10 shadow-xl">
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
-                <div className="lg:col-span-8 space-y-4">
-                  <div className="flex flex-wrap items-center gap-2 text-xs font-mono text-amber-400">
-                    <span>Honors &amp; AP Curriculum Aligned</span>
-                    <span aria-hidden="true" className="text-slate-600">·</span>
-                    <span className="text-slate-400">D'Evelyn &amp; High School Finals</span>
-                  </div>
-
-                  <h1 className="font-display text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-white leading-[1.1] balance-text max-w-2xl">
-                    Protect Your GPA. Lock Down Every Final.
-                  </h1>
-
-                  <p className="text-sm sm:text-base text-slate-300 max-w-2xl leading-relaxed">
-                    Turn any course code or class review PDF into high-yield formula sheets, a structured 5-day countdown, active recall flashcards, and cumulative mock exams built to raise your final score.
-                  </p>
-                </div>
-
-                {/* Focused Proof Metrics */}
-                <div className="lg:col-span-4 grid grid-cols-3 lg:grid-cols-1 gap-4 border-t lg:border-t-0 lg:border-l border-slate-800 pt-6 lg:pt-0 lg:pl-8">
-                  <div className="space-y-0.5">
-                    <div className="font-mono text-xl font-bold text-amber-400 tabular-nums">25+ Qs</div>
-                    <div className="text-xs text-slate-400">Cumulative mock exams with PDF export</div>
-                  </div>
-                  <div className="space-y-0.5">
-                    <div className="font-mono text-xl font-bold text-white tabular-nums">5-Day</div>
-                    <div className="text-xs text-slate-400">Spaced-retrieval prep schedule</div>
-                  </div>
-                  <div className="space-y-0.5">
-                    <div className="font-mono text-xl font-bold text-emerald-400 tabular-nums">100%</div>
-                    <div className="text-xs text-slate-400">Offline Chromebook HTML export</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Offline Export Action Bar */}
-              <div className="mt-8 pt-6 border-t border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div className="flex items-start sm:items-center gap-3">
-                  <ShieldCheck className="h-5 w-5 text-amber-400 shrink-0 mt-0.5 sm:mt-0" />
-                  <p className="text-xs text-slate-300 leading-relaxed">
-                    Studying on a restricted school Chromebook? Bundle your saved decks and all course presets into a single self-contained HTML file to study offline anytime.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={downloadStandaloneApp}
-                  className="shrink-0 inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 font-semibold text-xs rounded-lg transition-all duration-150 cursor-pointer whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
-                >
-                  <Download className="h-4 w-4 text-amber-400" />
-                  <span>Export Offline HTML App</span>
-                </button>
-              </div>
-            </section>
-
-            {/* Primary Split Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
-              {/* Left 2 Columns: GPA Calculator + Course Builder */}
-              <div className="lg:col-span-2 space-y-6">
-                <MaterialUploader onAnalysisComplete={(deck) => setActiveDeck(deck)} />
-              </div>
-
-              {/* Right Column: Saved Decks & Study Principle */}
-              <aside className="space-y-6">
-                <div id="archives-card" className="bg-[#0F172A] border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-3.5">
-                    <div className="flex items-center gap-2.5 text-white">
-                      <History className="h-4 w-4 text-amber-400 shrink-0" />
-                      <h2 className="font-display font-bold text-sm tracking-tight">Saved Study Decks</h2>
-                    </div>
-                    {savedDecks.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={clearAllDecks}
-                        className="text-xs font-medium text-rose-400 hover:text-rose-300 inline-flex items-center gap-1 cursor-pointer transition-colors"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        <span>Clear</span>
-                      </button>
+            {/* Zone 2: Shared-Element Motion Navigation */}
+            <nav className="hidden md:flex items-center gap-1 overflow-x-auto">
+              {NAV_ITEMS.map((item) => {
+                const isActive = route === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => navigateTo(item.id)}
+                    className={`relative px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer rounded-lg ${
+                      isActive ? "text-white" : "text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    <span>{item.label}</span>
+                    {isActive && (
+                      <motion.div
+                        layoutId="gparoyale-nav-underline"
+                        transition={SPRING_TACTILE}
+                        className="absolute left-2.5 right-2.5 bottom-0.5 h-0.5 rounded-full bg-gradient-to-r from-cyan-400 to-emerald-400"
+                      />
                     )}
-                  </div>
+                  </button>
+                );
+              })}
+            </nav>
 
-                  {savedDecks.length === 0 ? (
-                    <div className="py-8 text-center space-y-3">
-                      <div className="h-10 w-10 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-center mx-auto">
-                        <FileText className="h-5 w-5 text-slate-500" />
-                      </div>
-                      <p className="text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">
-                        No study decks generated yet. Enter a course code or select a preset to build your custom study guide and mock final exam.
-                      </p>
-                    </div>
-                  ) : (
-                    <div id="archives-list" className="space-y-2.5 max-h-[460px] overflow-y-auto pr-1">
-                      {savedDecks.map((deck) => (
-                        <div
-                          key={deck.id}
-                          onClick={() => loadSavedDeck(deck)}
-                          className="p-3.5 bg-slate-950/70 hover:bg-slate-900 border border-slate-800 hover:border-amber-500/40 rounded-xl cursor-pointer transition-all duration-150 flex items-start justify-between group"
-                        >
-                          <div className="space-y-1 min-w-0 pr-2">
-                            <div className="flex items-center gap-1.5 text-[11px] font-mono text-amber-400 tabular-nums">
-                              <span className="font-semibold">{deck.courseCode}</span>
-                              <span aria-hidden="true" className="text-slate-600">·</span>
-                              <span className="text-slate-500">{new Date(deck.timestamp).toLocaleDateString()}</span>
-                            </div>
-                            <h3 className="text-xs font-bold text-slate-100 line-clamp-1 group-hover:text-amber-300 transition-colors">
-                              {deck.summary.title}
-                            </h3>
-                            <p className="text-[11px] text-slate-400 font-mono tabular-nums">
-                              {deck.flashcards.length} cards · {deck.quiz.length} questions
-                            </p>
-                          </div>
+            {/* Zone 3: Active Deck Switcher + Offline Export */}
+            <div className="flex items-center gap-2.5 shrink-0">
+              {savedDecks.length > 0 && (
+                <select
+                  aria-label="Active Study Deck"
+                  value={activeDeck?.id || ""}
+                  onChange={(e) => {
+                    const found = savedDecks.find((d) => d.id === e.target.value);
+                    if (found) setActiveDeck(found);
+                  }}
+                  className="hidden sm:block max-w-[165px] px-2.5 py-1.5 bg-zinc-900 border border-white/10 rounded-lg font-mono text-[11px] text-cyan-300 focus:outline-none focus:border-cyan-400 cursor-pointer"
+                >
+                  {savedDecks.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.courseCode} · {d.courseName}
+                    </option>
+                  ))}
+                </select>
+              )}
 
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <button
-                              type="button"
-                              onClick={(e) => deleteDeck(e, deck.id)}
-                              className="p-1.5 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-rose-500/10 opacity-0 group-hover:opacity-100 transition-all duration-150 cursor-pointer"
-                              title="Delete guide"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                            <ChevronRight className="h-4 w-4 text-slate-500 group-hover:text-amber-400 group-hover:translate-x-0.5 transition-all" />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* High-Yield Study Principle */}
-                <div className="bg-[#0F172A] border border-slate-800 rounded-2xl p-5 space-y-2.5">
-                  <div className="flex items-center gap-2 text-amber-400">
-                    <CheckCircle2 className="h-4 w-4 shrink-0" />
-                    <span className="font-display font-bold text-xs tracking-wide uppercase">Exam Prep Strategy</span>
-                  </div>
-                  <p className="text-xs text-slate-300 leading-relaxed">
-                    Timed active recall and spaced practice over 5 days outperform passive re-reading. Use the target calculator to set your score goal, master the core cheat sheet, and run a full mock exam before test day.
-                  </p>
-                </div>
-              </aside>
+              <button
+                type="button"
+                onClick={downloadStandaloneApp}
+                className="inline-flex items-center gap-2 px-3.5 py-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-100 border border-white/15 hover:border-cyan-400/50 font-semibold text-xs rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                title="Download standalone school-safe offline companion"
+              >
+                <Download className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                <span className="hidden sm:inline">Offline Bundle</span>
+              </button>
             </div>
           </div>
-        )}
-      </main>
-    </div>
+
+          {/* Mobile Compact Nav */}
+          <div className="md:hidden border-t border-white/10 px-4 py-2 flex items-center gap-2 overflow-x-auto">
+            {NAV_ITEMS.map((item) => {
+              const isActive = route === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => navigateTo(item.id)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${
+                    isActive
+                      ? "bg-cyan-400 text-zinc-950 font-bold"
+                      : "bg-zinc-900 text-zinc-400"
+                  }`}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+        </header>
+
+        {/* Main Workspace */}
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-7">
+          <AnimatePresence mode="wait">
+            {route === "command" && (
+              <motion.div
+                key="route-command"
+                variants={PANEL_FADE}
+                initial="hidden"
+                animate="visible"
+                exit="exit"
+              >
+                <TelemetryCommandCenter
+                  decks={savedDecks}
+                  activeDeck={activeDeck}
+                  readiness={readiness}
+                  testDate={activeTestDate}
+                  onChangeTestDate={handleChangeTestDate}
+                  onSelectDeck={(d) => {
+                    setActiveDeck(d);
+                    syncDeckToFSRS(d);
+                    bumpTelemetry();
+                  }}
+                  onDeleteDeck={handleDeleteDeck}
+                  onNavigate={navigateTo}
+                  onLaunchStudyHub={(d) => {
+                    setActiveDeck(d);
+                    setDeckHubInitialTab("summary");
+                    setDeckHubOpen(true);
+                    setRoute("builder");
+                  }}
+                />
+              </motion.div>
+            )}
+
+            {route === "builder" && (
+              <motion.div
+                key={deckHubOpen && activeDeck ? `hub-${activeDeck.id}` : "route-builder"}
+                variants={PANEL_FADE}
+                initial="hidden"
+                animate="visible"
+                exit="exit"
+              >
+                {deckHubOpen && activeDeck ? (
+                  <StudyDeckView
+                    deck={activeDeck}
+                    initialTab={deckHubInitialTab}
+                    redBlueMemoryTint={redBlueMemoryTint}
+                    onToggleRedBlueTint={handleToggleRedBlueTint}
+                    onBack={() => setDeckHubOpen(false)}
+                    onUpdateDeck={handleUpdateDeck}
+                    onTelemetryChange={bumpTelemetry}
+                    onNavigateModule={navigateTo}
+                  />
+                ) : (
+                  <MaterialUploader
+                    onAnalysisComplete={handleDeckCreated}
+                    defaultTestDate={activeTestDate}
+                  />
+                )}
+              </motion.div>
+            )}
+
+            {route === "recall" && (
+              <motion.div
+                key="route-recall"
+                variants={PANEL_FADE}
+                initial="hidden"
+                animate="visible"
+                exit="exit"
+              >
+                <RecallFeynmanStudio
+                  deck={activeDeck}
+                  redBlueMemoryTint={redBlueMemoryTint}
+                  onToggleRedBlueTint={handleToggleRedBlueTint}
+                  onTelemetryChange={bumpTelemetry}
+                  onGoToBuilder={() => navigateTo("builder")}
+                />
+              </motion.div>
+            )}
+
+            {route === "royale" && (
+              <motion.div
+                key={`route-royale-${royaleSubMode}`}
+                variants={PANEL_FADE}
+                initial="hidden"
+                animate="visible"
+                exit="exit"
+              >
+                {royaleSubMode === "matching" && activeDeck ? (
+                  <StudyDeckView
+                    deck={activeDeck}
+                    initialTab="quiz"
+                    redBlueMemoryTint={redBlueMemoryTint}
+                    onToggleRedBlueTint={handleToggleRedBlueTint}
+                    onBack={() => setRoyaleSubMode("royale")}
+                    onUpdateDeck={handleUpdateDeck}
+                    onTelemetryChange={bumpTelemetry}
+                    onNavigateModule={navigateTo}
+                  />
+                ) : (
+                  <WeaknessRoyaleStudio
+                    decks={savedDecks}
+                    activeDeck={activeDeck}
+                    onTelemetryChange={bumpTelemetry}
+                    onOpenMatchingExam={() => setRoyaleSubMode("matching")}
+                    onGoToBuilder={() => navigateTo("builder")}
+                  />
+                )}
+              </motion.div>
+            )}
+
+            {route === "socratic" && (
+              <motion.div
+                key="route-socratic"
+                variants={PANEL_FADE}
+                initial="hidden"
+                animate="visible"
+                exit="exit"
+              >
+                <SocraticArenaStudio
+                  activeDeck={activeDeck}
+                  onTelemetryChange={bumpTelemetry}
+                />
+              </motion.div>
+            )}
+
+            {route === "map" && (
+              <motion.div
+                key="route-map"
+                variants={PANEL_FADE}
+                initial="hidden"
+                animate="visible"
+                exit="exit"
+              >
+                <DualCodingVisualizer
+                  deck={activeDeck}
+                  onUpdateDeck={handleUpdateDeck}
+                  onDrillRecall={() => navigateTo("recall")}
+                  onDrillRoyale={() => navigateTo("royale")}
+                  onGoToBuilder={() => navigateTo("builder")}
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </main>
+      </div>
+    </MotionConfig>
   );
 }
