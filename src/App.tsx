@@ -6,6 +6,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence, MotionConfig } from "motion/react";
 import { Download } from "lucide-react";
+import { Analytics } from "@vercel/analytics/react";
 import { StudyDeck, WorkspaceRoute } from "./types";
 import { generateOfflineHtml } from "./utils/htmlExporter";
 import {
@@ -489,6 +490,7 @@ export default function App() {
           </AnimatePresence>
         </main>
       </div>
+      <Analytics />
     </MotionConfig>
   );
 }
