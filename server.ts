@@ -8,9 +8,9 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
-// Increase limits to support base64 study files
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ limit: "50mb", extended: true }));
+// Increase limits to support up to 5 base64 study files
+app.use(express.json({ limit: "65mb" }));
+app.use(express.urlencoded({ limit: "65mb", extended: true }));
 
 let aiClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI | null {
@@ -466,21 +466,54 @@ app.post("/api/analyze-finals-material", async (req, res) => {
       units,
       fileBase64,
       fileMimeType,
+      files,
     } = req.body;
+
+    interface UploadedMaterialPayload {
+      name: string;
+      mimeType: string;
+      base64: string;
+    }
+
+    const normalizedFiles: UploadedMaterialPayload[] = Array.isArray(files)
+      ? files
+          .filter(
+            (f: any) =>
+              f &&
+              typeof f.base64 === "string" &&
+              f.base64.trim() &&
+              typeof f.mimeType === "string" &&
+              f.mimeType.trim()
+          )
+          .slice(0, 5)
+          .map((f: any, idx: number) => ({
+            name: typeof f.name === "string" && f.name.trim() ? f.name.trim() : `Material_${idx + 1}`,
+            mimeType: f.mimeType.trim(),
+            base64: f.base64,
+          }))
+      : fileBase64 && fileMimeType
+      ? [
+          {
+            name: "Uploaded_Study_Material",
+            mimeType: String(fileMimeType),
+            base64: String(fileBase64),
+          },
+        ]
+      : [];
 
     const cleanPastedText = typeof pastedText === "string" ? pastedText.trim() : "";
     const resolvedCourseCode =
       typeof courseCode === "string" && courseCode.trim()
         ? courseCode.trim()
-        : cleanPastedText || fileBase64
+        : cleanPastedText || normalizedFiles.length > 0
         ? "CUSTOM_NOTES"
         : "";
 
     if (!resolvedCourseCode) {
       if (ndjson) {
-        ndjson.finishError(400, "Select a D'Evelyn course, enter a course code, or paste your class notes.");
+        ndjson.finishError(400, "Select a D'Evelyn course, enter a course code, paste notes, or upload study materials.");
       } else {
-        res.status(400).json({ error: "Select a D'Evelyn course, enter a course code, or paste your class notes." });
+        res.status(400).json({ error: "Select a D'Evelyn course, enter a course code, paste notes, or upload study materials." });
       }
       return;
     }
@@ -491,8 +524,8 @@ app.post("/api/analyze-finals-material", async (req, res) => {
     const formattedUnits =
       unitsList.length > 0
         ? unitsList.map((u, idx) => `  ${idx + 1}. ${u}`).join("\n")
-        : cleanPastedText
-        ? "Derive distinct unit/topic labels directly from the student's pasted syllabus/notes."
+        : cleanPastedText || normalizedFiles.length > 0
+        ? "Derive distinct unit/topic labels directly from the student's uploaded materials and pasted syllabus/notes."
         : "Cover the complete cumulative D'Evelyn syllabus for this course.";
 
     const systemPrompt = `You are a veteran D'Evelyn Jr./Sr. High School department chair and AP/Honors exam writer designing an elite finals preparation deck for "${activeCourseName}" (${resolvedCourseCode}, Department: ${department || "Academic"}) at "${activeSchool}".
@@ -503,7 +536,7 @@ STRICT SUBJECT LOCK:
 
 PREDICTIVE D'EVELYN FINALS QUALITY STANDARD:
 - Ground every item in the exact D'Evelyn textbooks, problem types, proofs, theorems, primary sources, or labs listed below:
-  - Course Overview & Texts: ${curriculumDetails || "Official D'Evelyn honors/cumulative syllabus & pasted class notes"}
+  - Course Overview & Texts: ${curriculumDetails || "Official D'Evelyn honors/cumulative syllabus & uploaded class materials"}
   - How Finals Are Tested: ${examFocus || "Cumulative honors/AP rigorous examination"}
   - Core Strategy: ${studyStrategy || "Active retrieval and rigorous problem execution"}
 - Target Curriculum Units to Predict & Cover Evenly:
@@ -537,20 +570,43 @@ Return ONLY valid JSON matching the schema with:
 - flashcards: 14 to 16 predictive D'Evelyn exam flashcards (each with question, answer, unitTag, tier)
 - quiz: EXACTLY 25 unique cumulative multiple-choice questions (each with question, options, correctIndex, explanation, unitTag, tier)`;
 
+    const contents: any[] = [];
+    const textAttachments: string[] = [];
+    const binaryAttachmentNames: string[] = [];
+
+    for (const file of normalizedFiles) {
+      const cleanBase64 = String(file.base64).replace(/^data:.*;base64,/, "");
+      const mimeLower = file.mimeType.toLowerCase();
+      if (mimeLower.startsWith("text/") || mimeLower === "application/json") {
+        const decoded = Buffer.from(cleanBase64, "base64").toString("utf-8").trim();
+        if (decoded) {
+          textAttachments.push(`--- File: ${file.name} ---\n${decoded.slice(0, 12000)}`);
+        }
+      } else {
+        binaryAttachmentNames.push(file.name);
+        contents.push({
+          inlineData: {
+            mimeType: file.mimeType,
+            data: cleanBase64,
+          },
+        });
+      }
+    }
+
     const promptMessage = `Build the complete predictive D'Evelyn finals study deck for ${activeCourseName} (${resolvedCourseCode}). Cover every listed unit across 14–16 predictive flashcards, a dense unit-by-unit cheat sheet, a 5-day schedule, and EXACTLY 25 unique multiple-choice questions with distinct correct answers per 10-question set.${
-      cleanPastedText ? `\n\nStudent Lecture Notes / Syllabus / Excerpt:\n"""\n${cleanPastedText.slice(0, 18000)}\n"""` : ""
+      binaryAttachmentNames.length > 0
+        ? `\n\nSynthesize across ALL ${binaryAttachmentNames.length} attached study document(s): ${binaryAttachmentNames.join(", ")}.`
+        : ""
+    }${
+      textAttachments.length > 0
+        ? `\n\nAttached Text Study Materials:\n${textAttachments.join("\n\n")}`
+        : ""
+    }${
+      cleanPastedText
+        ? `\n\nStudent Lecture Notes / Syllabus / Excerpt:\n"""\n${cleanPastedText.slice(0, 18000)}\n"""`
+        : ""
     }`;
 
-    const contents: any[] = [];
-    if (fileBase64 && fileMimeType) {
-      const cleanBase64 = String(fileBase64).replace(/^data:.*;base64,/, "");
-      contents.push({
-        inlineData: {
-          mimeType: fileMimeType,
-          data: cleanBase64,
-        },
-      });
-    }
     contents.push({ text: promptMessage });
 
     let lastStageSent = "";

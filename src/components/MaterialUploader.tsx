@@ -71,12 +71,22 @@ export default function MaterialUploader({
   const [pastedNotes, setPastedNotes] = useState("");
   const [testDate, setTestDate] = useState(defaultTestDate);
 
-  const [attachedFile, setAttachedFile] = useState<{
+  const MAX_FILES = 5;
+  const MAX_SINGLE_FILE_BYTES = 15 * 1024 * 1024;
+  const MAX_TOTAL_BYTES = 35 * 1024 * 1024;
+
+  interface AttachedStudyMaterial {
+    id: string;
     name: string;
     size: string;
+    sizeBytes: number;
     mimeType: string;
     base64: string;
-  } | null>(null);
+  }
+
+  const [attachedFiles, setAttachedFiles] = useState<AttachedStudyMaterial[]>([]);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const [fileNotice, setFileNotice] = useState<string | null>(null);
 
   const [currentGrade, setCurrentGrade] = useState<number>(83);
   const [finalWeight, setFinalWeight] = useState<number>(15);
@@ -140,30 +150,117 @@ export default function MaterialUploader({
     return deduceCourse(courseCode.trim()).units;
   }, [selectedPreset, courseCode]);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const readFileAsDataUrl = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(new Error(`Failed to read "${file.name}".`));
+      reader.readAsDataURL(file);
+    });
 
-    if (file.size > 15 * 1024 * 1024) {
-      setError("File exceeds the 15MB limit. Please upload a smaller PDF or excerpt.");
+  const inferMimeType = (file: File): string => {
+    if (file.type) return file.type;
+    const lower = file.name.toLowerCase();
+    if (lower.endsWith(".pdf")) return "application/pdf";
+    if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "text/markdown";
+    if (lower.endsWith(".csv")) return "text/csv";
+    if (lower.endsWith(".txt")) return "text/plain";
+    if (lower.endsWith(".png")) return "image/png";
+    if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+    if (lower.endsWith(".webp")) return "image/webp";
+    return "application/pdf";
+  };
+
+  const processIncomingFiles = async (incomingList: FileList | File[]) => {
+    const incoming = Array.from(incomingList);
+    if (incoming.length === 0) return;
+
+    setFileNotice(null);
+    setError(null);
+
+    const remainingSlots = MAX_FILES - attachedFiles.length;
+    if (remainingSlots <= 0) {
+      setFileNotice(`Maximum of ${MAX_FILES} study materials reached. Remove a file to add another.`);
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64String = reader.result as string;
-      setAttachedFile({
-        name: file.name,
-        size: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
-        mimeType: file.type || "application/pdf",
-        base64: base64String,
-      });
-      setError(null);
-    };
-    reader.onerror = () => {
-      setError("Failed to read file. Please try a different PDF or course code.");
-    };
-    reader.readAsDataURL(file);
+    let runningBytes = attachedFiles.reduce((sum, f) => sum + f.sizeBytes, 0);
+    const existingKeys = new Set(attachedFiles.map((f) => `${f.name}::${f.sizeBytes}`));
+    const accepted: AttachedStudyMaterial[] = [];
+    const warnings: string[] = [];
+
+    for (const file of incoming) {
+      if (accepted.length >= remainingSlots) {
+        warnings.push(`Limit is ${MAX_FILES} materials — extra file(s) skipped.`);
+        break;
+      }
+
+      const key = `${file.name}::${file.size}`;
+      if (existingKeys.has(key)) {
+        warnings.push(`"${file.name}" is already attached.`);
+        continue;
+      }
+
+      if (file.size > MAX_SINGLE_FILE_BYTES) {
+        warnings.push(`"${file.name}" exceeds the 15 MB per-file limit.`);
+        continue;
+      }
+
+      if (runningBytes + file.size > MAX_TOTAL_BYTES) {
+        warnings.push(`"${file.name}" would exceed the 35 MB combined upload limit.`);
+        continue;
+      }
+
+      try {
+        const base64String = await readFileAsDataUrl(file);
+        const formattedSize =
+          file.size >= 1024 * 1024
+            ? `${(file.size / (1024 * 1024)).toFixed(2)} MB`
+            : `${Math.max(1, Math.round(file.size / 1024))} KB`;
+
+        accepted.push({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          name: file.name,
+          size: formattedSize,
+          sizeBytes: file.size,
+          mimeType: inferMimeType(file),
+          base64: base64String,
+        });
+        existingKeys.add(key);
+        runningBytes += file.size;
+      } catch (err: any) {
+        warnings.push(err?.message || `Failed to read "${file.name}".`);
+      }
+    }
+
+    if (accepted.length > 0) {
+      setAttachedFiles((prev) => [...prev, ...accepted]);
+    }
+    if (warnings.length > 0) {
+      setFileNotice(warnings[0]);
+    }
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      await processIncomingFiles(files);
+    }
+    e.target.value = "";
+  };
+
+  const handleDropFiles = async (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFiles(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      await processIncomingFiles(e.dataTransfer.files);
+    }
+  };
+
+  const removeAttachedFile = (id: string) => {
+    setAttachedFiles((prev) => prev.filter((f) => f.id !== id));
+    setFileNotice(null);
   };
 
   const handleSelectPreset = (course: Course) => {
@@ -236,12 +333,13 @@ export default function MaterialUploader({
   };
 
   const calcResult = calculateEstimate();
-  const canSubmit = Boolean(courseCode.trim() || pastedNotes.trim() || attachedFile);
+  const canSubmit = Boolean(courseCode.trim() || pastedNotes.trim() || attachedFiles.length > 0);
 
   const runGeneration = async () => {
-    const targetCode = courseCode.trim() || (pastedNotes.trim() || attachedFile ? "CUSTOM_NOTES" : "");
+    const targetCode =
+      courseCode.trim() || (pastedNotes.trim() || attachedFiles.length > 0 ? "CUSTOM_NOTES" : "");
     if (!targetCode) {
-      setError("Select a D'Evelyn course, enter a course code, or paste class notes first.");
+      setError("Select a D'Evelyn course, enter a course code, paste notes, or upload study materials first.");
       return;
     }
 
@@ -300,12 +398,17 @@ export default function MaterialUploader({
       additionalNotes: `Student is targeting a grade of ${targetGrade}% and currently holds ${currentGrade}%. Final weight: ${finalWeight}%. ${
         testDate ? `Target Exam Date: ${testDate}. ` : ""
       }${
-        attachedFile
-          ? `CRITICAL: Student uploaded study sheet "${attachedFile.name}". Extract specific formulas, terms, and exam problems directly from it.`
+        attachedFiles.length > 0
+          ? `CRITICAL: Student uploaded ${attachedFiles.length} study material(s) (${attachedFiles
+              .map((f) => f.name)
+              .join(", ")}). Extract specific formulas, terms, and exam problems directly across all uploaded files.`
           : ""
       }`,
-      fileBase64: attachedFile?.base64 || null,
-      fileMimeType: attachedFile?.mimeType || null,
+      files: attachedFiles.map((f) => ({
+        name: f.name,
+        mimeType: f.mimeType,
+        base64: f.base64,
+      })),
     };
 
     try {
@@ -738,40 +841,100 @@ export default function MaterialUploader({
               />
             </div>
 
-            <div className="lg:col-span-5 space-y-2 flex flex-col justify-between">
-              <span className="text-xs font-semibold text-zinc-200">
-                4. Teacher Review Sheet PDF (Optional)
-              </span>
-              <div className="border border-white/15 hover:border-purple-400/70 bg-zinc-950/75 hover:bg-zinc-900 rounded-xl p-4 transition-colors text-center relative cursor-pointer group flex-1 flex flex-col items-center justify-center">
+            <div className="lg:col-span-5 space-y-2.5 flex flex-col justify-between">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-zinc-200">
+                  4. Upload Study Materials (Up to {MAX_FILES})
+                </span>
+                <div className="flex items-center gap-2.5 font-mono text-[11px] tabular-nums">
+                  <span className={attachedFiles.length >= MAX_FILES ? "text-emerald-400 font-bold" : "text-purple-400"}>
+                    {attachedFiles.length} / {MAX_FILES} attached
+                  </span>
+                  {attachedFiles.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAttachedFiles([]);
+                        setFileNotice(null);
+                      }}
+                      className="text-zinc-400 hover:text-red-400 cursor-pointer"
+                    >
+                      Clear all
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (attachedFiles.length < MAX_FILES) setIsDraggingFiles(true);
+                }}
+                onDragLeave={() => setIsDraggingFiles(false)}
+                onDrop={handleDropFiles}
+                className={`border rounded-xl p-4 transition-colors text-center relative flex-1 flex flex-col items-center justify-center min-h-[120px] ${
+                  attachedFiles.length >= MAX_FILES
+                    ? "border-emerald-400/35 bg-zinc-950/60 cursor-not-allowed"
+                    : isDraggingFiles
+                    ? "border-emerald-400 bg-emerald-500/10 cursor-pointer"
+                    : "border-white/15 hover:border-purple-400/70 bg-zinc-950/75 hover:bg-zinc-900 cursor-pointer"
+                }`}
+              >
                 <input
                   type="file"
-                  accept=".pdf,text/plain,application/pdf"
+                  multiple
+                  disabled={attachedFiles.length >= MAX_FILES}
+                  accept=".pdf,.txt,.md,.markdown,.csv,.png,.jpg,.jpeg,.webp,application/pdf,text/plain,text/markdown,text/csv,image/png,image/jpeg,image/webp"
                   onChange={handleFileChange}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed z-10"
                 />
                 <div className="p-2 bg-zinc-900 border border-white/10 rounded-lg text-purple-400 mb-2">
                   <UploadCloud className="h-5 w-5" />
                 </div>
-                <div className="text-xs font-bold text-zinc-200">Drop PDF or Click to Browse</div>
-                <div className="text-[11px] text-zinc-400 font-mono mt-0.5">Max 15MB · TXT or PDF</div>
+                <div className="text-xs font-bold text-zinc-200">
+                  {attachedFiles.length >= MAX_FILES
+                    ? "5 / 5 Study Materials Attached"
+                    : "Drop Files or Click to Add (Up to 5)"}
+                </div>
+                <div className="text-[11px] text-zinc-400 font-mono mt-0.5">
+                  PDF, TXT, MD, CSV, PNG/JPG · 15MB/file · 35MB total
+                </div>
               </div>
 
-              {attachedFile && (
-                <div className="flex items-center justify-between bg-zinc-950 border border-emerald-400/40 rounded-xl px-3 py-2.5">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <FileText className="h-4 w-4 text-emerald-400 shrink-0" />
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-white truncate">{attachedFile.name}</p>
-                      <p className="text-[10px] font-mono text-zinc-400">{attachedFile.size}</p>
+              {fileNotice && (
+                <div className="px-3 py-2 bg-amber-950/40 border border-amber-500/40 rounded-lg text-[11px] text-amber-200 flex items-center gap-2">
+                  <AlertTriangle className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                  <span>{fileNotice}</span>
+                </div>
+              )}
+
+              {attachedFiles.length > 0 && (
+                <div className="space-y-1.5 max-h-[190px] overflow-y-auto pr-1">
+                  {attachedFiles.map((file, idx) => (
+                    <div
+                      key={file.id}
+                      className="flex items-center justify-between bg-zinc-950 border border-emerald-400/35 rounded-xl px-3 py-2 gap-2"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="font-mono text-[10px] text-purple-400 tabular-nums shrink-0">
+                          {String(idx + 1).padStart(2, "0")}
+                        </span>
+                        <FileText className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-white truncate">{file.name}</p>
+                          <p className="text-[10px] font-mono text-zinc-400 tabular-nums">{file.size}</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${file.name}`}
+                        onClick={() => removeAttachedFile(file.id)}
+                        className="text-zinc-400 hover:text-red-400 p-1 cursor-pointer shrink-0"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
                     </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setAttachedFile(null)}
-                    className="text-zinc-400 hover:text-red-400 p-1 cursor-pointer"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
+                  ))}
                 </div>
               )}
             </div>
