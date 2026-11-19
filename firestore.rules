@@ -204,9 +204,9 @@ service cloud.firestore {
             && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'winnerId', 'winnerName', 'updatedAt'])
           )
           ||
-          // Action: Host requeues finished room back to open lobby (same roomCode)
+          // Action: Host requeues active/finished room back to open lobby (same roomCode)
           (
-            existing().status == 'finished'
+            existing().status in ['active', 'finished']
             && incoming().status == 'lobby'
             && incoming().winnerId == ''
             && incoming().winnerName == ''
@@ -217,9 +217,9 @@ service cloud.firestore {
             ])
           )
           ||
-          // Action: Host quick-requeues finished room directly into a new active match (same roomCode)
+          // Action: Host quick-requeues active/finished room directly into a new active match (same roomCode)
           (
-            existing().status == 'finished'
+            existing().status in ['active', 'finished']
             && incoming().status == 'active'
             && incoming().winnerId == ''
             && incoming().winnerName == ''

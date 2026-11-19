@@ -887,7 +887,9 @@ export async function hostRequeueRoyaleRoom(params: {
     winnerId: "",
     winnerName: "",
     arenaSeed: newSeed,
-    matchStartedAtMs: immediateLaunch ? Date.now() : 0,
+    matchStartedAtMs: immediateLaunch
+      ? Math.max(Date.now(), (room.matchStartedAtMs || 0) + 1)
+      : 0,
     ...(immediateLaunch ? {} : { countdownEndsAtMs: 0 }),
     updatedAt: serverTimestamp(),
   });

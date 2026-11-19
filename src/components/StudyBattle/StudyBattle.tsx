@@ -890,38 +890,91 @@ function StudyBattleInner({
     ]
   );
 
-  const handleRequeue = async (immediateLaunch: boolean) => {
-    if (!room || !isHost) return;
-    setErrorMsg(null);
-    const curPlayers =
-      latestPlayersRef.current.length > 0 ? latestPlayersRef.current : players;
-    if (immediateLaunch && !fillWithBots && curPlayers.length < 2) {
-      setErrorMsg(
-        "Friends-Only instant re-drop needs at least 2 players in the room. Requeue to Lobby or turn AI Bots Backfill on."
-      );
-      return;
-    }
-    setIsRequeueing(true);
-    playBattleSfx(immediateLaunch ? "jumppad" : "crate", muted);
-    try {
-      const db = getStudyBattleDb(firebaseConfig);
-      await hostRequeueRoyaleRoom({
-        db,
-        room,
-        players: curPlayers,
-        immediateLaunch,
-        fillWithBots,
-      });
-      setMatchResult(null);
-      dismissedMatchAtRef.current = null;
-    } catch (err) {
-      setErrorMsg(
-        err instanceof Error ? err.message : "Failed to requeue room."
-      );
-    } finally {
-      setIsRequeueing(false);
-    }
-  };
+  const handleRequeue = useCallback(
+    async (
+      immediateLaunch: boolean,
+      directMatchStats?: {
+        placement: number;
+        totalPlayers: number;
+        kills: number;
+        miniBozzKills: number;
+        medallionSecured: boolean;
+        questionsCorrect: number;
+        questionsAttempted: number;
+        winnerName: string;
+      }
+    ) => {
+      if (!room || !isHost) return;
+      setErrorMsg(null);
+      const curPlayers =
+        latestPlayersRef.current.length > 0 ? latestPlayersRef.current : players;
+      if (immediateLaunch && !fillWithBots && curPlayers.length < 2) {
+        setErrorMsg(
+          "Friends-Only instant re-drop needs at least 2 players in the room. Requeue to Lobby or turn AI Bots Backfill on."
+        );
+        return;
+      }
+      setIsRequeueing(true);
+      playBattleSfx(immediateLaunch ? "jumppad" : "crate", muted);
+      try {
+        const db = getStudyBattleDb(firebaseConfig);
+        const matchKey = `${activeRoomCode || ""}_${room.matchStartedAtMs || 0}`;
+        if (directMatchStats && recordedMatchKeyRef.current !== matchKey) {
+          recordedMatchKeyRef.current = matchKey;
+          const activeName =
+            curPlayers.find((p) => p.playerId === playerId)?.displayName ||
+            hostName ||
+            playerName;
+          void recordMatchRankResult({
+            db,
+            profileId,
+            displayName: activeName,
+            placement: directMatchStats.placement,
+            totalPlayers: directMatchStats.totalPlayers,
+            kills: directMatchStats.kills,
+            miniBozzKills: directMatchStats.miniBozzKills,
+            medallionSecured: directMatchStats.medallionSecured,
+            questionsCorrect: directMatchStats.questionsCorrect,
+            questionsAttempted: directMatchStats.questionsAttempted,
+            winnerName: directMatchStats.winnerName,
+          })
+            .then(({ profile: updatedProfile }) => {
+              setProfile(updatedProfile);
+            })
+            .catch(() => {});
+        }
+        await hostRequeueRoyaleRoom({
+          db,
+          room,
+          players: curPlayers,
+          immediateLaunch,
+          fillWithBots,
+        });
+        setMatchResult(null);
+        recordedMatchKeyRef.current = null;
+        dismissedMatchAtRef.current = null;
+      } catch (err) {
+        setErrorMsg(
+          err instanceof Error ? err.message : "Failed to requeue room."
+        );
+      } finally {
+        setIsRequeueing(false);
+      }
+    },
+    [
+      room,
+      isHost,
+      players,
+      fillWithBots,
+      muted,
+      firebaseConfig,
+      activeRoomCode,
+      playerId,
+      hostName,
+      playerName,
+      profileId,
+    ]
+  );
 
   const handleLeaveRoom = () => {
     setActiveRoomCode(null);
@@ -1074,11 +1127,19 @@ function StudyBattleInner({
                   </span>
                 </div>
                 {room.status === "active" &&
-                  room.matchStartedAtMs === dismissedMatchAtRef.current && (
-                    <span className="text-[11px] text-amber-300">
-                      Match still active for surviving squadmates
-                    </span>
-                  )}
+                  room.matchStartedAtMs === dismissedMatchAtRef.current &&
+                  (() => {
+                    const aliveFriends = players.filter((p) => p.alive).length;
+                    return aliveFriends > 0 ? (
+                      <span className="text-[11px] text-amber-300">
+                        {aliveFriends} {aliveFriends === 1 ? "friend" : "friends"} still fighting
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-emerald-300 font-bold">
+                        All friends eliminated (bots only left) · Ready to requeue now
+                      </span>
+                    );
+                  })()}
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1174,6 +1235,9 @@ function StudyBattleInner({
             onToggleMute={() => setMuted((m) => !m)}
             onLeaveRoom={handleLeaveRoom}
             onMatchComplete={handleMatchComplete}
+            onRequeue={isHost ? handleRequeue : undefined}
+            isRequeueing={isRequeueing}
+            fillWithBots={fillWithBots}
             registerLiveStream={registerLiveStream}
           />
         </div>

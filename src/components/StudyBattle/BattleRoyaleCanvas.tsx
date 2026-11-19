@@ -2,15 +2,22 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  BookOpen,
+  Check,
+  ChevronLeft,
+  ChevronRight,
   Compass,
   Crosshair,
+  Eye,
   Flame,
   Heart,
   Layers,
   LogOut,
   Map as MapIcon,
   Medal,
+  Play,
   Radio,
+  RotateCcw,
   Shield,
   Skull,
   Sparkles,
@@ -19,6 +26,7 @@ import {
   Volume2,
   VolumeX,
   Wind,
+  X,
   Zap,
 } from "lucide-react";
 import { Firestore } from "firebase/firestore";
@@ -84,6 +92,21 @@ interface BattleRoyaleCanvasProps {
     questionsAttempted: number;
     winnerName: string;
   }) => void;
+  onRequeue?: (
+    immediateLaunch: boolean,
+    directMatchStats?: {
+      placement: number;
+      totalPlayers: number;
+      kills: number;
+      miniBozzKills: number;
+      medallionSecured: boolean;
+      questionsCorrect: number;
+      questionsAttempted: number;
+      winnerName: string;
+    }
+  ) => Promise<void>;
+  isRequeueing?: boolean;
+  fillWithBots?: boolean;
   registerLiveStream?: (handlers: {
     onPlayers: (p: StudyPlayerDocument[]) => void;
     onWorld: (w: StudyWorldStateDocument | null) => void;
@@ -204,6 +227,10 @@ interface HudSnapshot {
   nearbyCrate: { crate: ArenaCrate; lockedSec: number } | null;
   nearbyBoss: MiniBozzState | null;
   killFeed: string[];
+  spectatingName: string;
+  spectatingKind: "Friend" | "Bot" | null;
+  spectatingHp: number;
+  spectatingShield: number;
 }
 
 const OPTION_LETTERS = ["A", "B", "C", "D"] as const;
@@ -395,6 +422,9 @@ export default function BattleRoyaleCanvas({
   onToggleMute,
   onLeaveRoom,
   onMatchComplete,
+  onRequeue,
+  isRequeueing = false,
+  fillWithBots = true,
   registerLiveStream,
 }: BattleRoyaleCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -415,16 +445,16 @@ export default function BattleRoyaleCanvas({
     x: meFromRoom?.x ?? ARENA_SIZE / 2,
     y: meFromRoom?.y ?? ARENA_SIZE / 2,
     aimAngle: 0,
-    hp: meFromRoom?.hp ?? 100,
-    shield: meFromRoom?.shield ?? 0,
-    ammo: meFromRoom?.ammo ?? 0,
+    hp: 100,
+    shield: 0,
+    ammo: 0,
     medkits: 1,
     shieldPotions: 1,
     tokens: 2,
     shockwaveCharges: 2,
-    kills: meFromRoom?.kills ?? 0,
+    kills: 0,
     miniBozzKills: 0,
-    hasMedallion: meFromRoom?.hasMedallion ?? false,
+    hasMedallion: false,
     streak: 0,
     weapons: {
       blaster: "Common",
@@ -433,10 +463,10 @@ export default function BattleRoyaleCanvas({
       railgun: null,
     },
     activeWeapon: "blaster",
-    questionsCorrect: meFromRoom?.questionsCorrect ?? 0,
-    questionsAttempted: meFromRoom?.questionsAttempted ?? 0,
-    alive: meFromRoom?.alive ?? true,
-    placement: meFromRoom?.placement ?? 0,
+    questionsCorrect: 0,
+    questionsAttempted: 0,
+    alive: true,
+    placement: 0,
     speedBoostUntilMs: 0,
     radarUntilMs: 0,
     exposedUntilMs: 0,
@@ -570,6 +600,22 @@ export default function BattleRoyaleCanvas({
     tone: "reward" | "penalty";
   } | null>(null);
 
+  const [eliminatedMode, setEliminatedMode] = useState<"practice" | "spectate">("practice");
+  const eliminatedModeRef = useRef<"practice" | "spectate">("practice");
+  eliminatedModeRef.current = eliminatedMode;
+  const [practiceQuestionIdx, setPracticeQuestionIdx] = useState(() =>
+    room.questions.length > 0 ? Math.floor(Math.random() * room.questions.length) : 0
+  );
+  const [practicePickedIdx, setPracticePickedIdx] = useState<number | null>(null);
+  const practicePickedIdxRef = useRef<number | null>(null);
+  practicePickedIdxRef.current = practicePickedIdx;
+  const [practiceStats, setPracticeStats] = useState({
+    correct: 0,
+    attempted: 0,
+    streak: 0,
+  });
+  const spectateTargetIdRef = useRef<string | null>(null);
+
   const [hud, setHud] = useState<HudSnapshot>({
     hp: 100,
     shield: 0,
@@ -607,12 +653,21 @@ export default function BattleRoyaleCanvas({
     nearbyCrate: null,
     nearbyBoss: null,
     killFeed: worldState?.killFeed || [],
+    spectatingName: "",
+    spectatingKind: null,
+    spectatingHp: 0,
+    spectatingShield: 0,
   });
 
   activeQuizRef.current = Boolean(activePrompt);
 
   useEffect(() => {
-    if (!spawnSyncedRef.current && meFromRoom) {
+    if (
+      !spawnSyncedRef.current &&
+      meFromRoom &&
+      meFromRoom.alive &&
+      meFromRoom.placement === 0
+    ) {
       spawnSyncedRef.current = true;
       localRef.current.x = meFromRoom.x;
       localRef.current.y = meFromRoom.y;
@@ -969,6 +1024,25 @@ export default function BattleRoyaleCanvas({
       const now = Date.now();
       if (seenShotIdsRef.current.size > 500) {
         seenShotIdsRef.current.clear();
+      }
+      const meSnap = nextPlayers.find((p) => p.playerId === currentPlayerId);
+      if (
+        !spawnSyncedRef.current &&
+        meSnap &&
+        meSnap.alive &&
+        meSnap.placement === 0
+      ) {
+        spawnSyncedRef.current = true;
+        localRef.current.x = meSnap.x;
+        localRef.current.y = meSnap.y;
+        cameraRef.current.x = Math.max(
+          0,
+          Math.min(ARENA_SIZE - canvasSizeRef.current.cw, meSnap.x - canvasSizeRef.current.cw / 2)
+        );
+        cameraRef.current.y = Math.max(
+          0,
+          Math.min(ARENA_SIZE - canvasSizeRef.current.ch, meSnap.y - canvasSizeRef.current.ch / 2)
+        );
       }
       for (const p of nextPlayers) {
         if (p.playerId === currentPlayerId) continue;
@@ -1906,6 +1980,89 @@ export default function BattleRoyaleCanvas({
     ]
   );
 
+  const activePracticeQuestion =
+    room.questions[practiceQuestionIdx % Math.max(1, room.questions.length)] ||
+    room.questions[0];
+
+  const handleNextPracticeQuestion = useCallback(() => {
+    const total = room.questions.length;
+    setPracticePickedIdx(null);
+    if (total > 1) {
+      setPracticeQuestionIdx((prev) => (prev + 1) % total);
+    }
+  }, [room.questions.length]);
+
+  const handleAnswerPractice = useCallback(
+    (optionIndex: number) => {
+      if (practicePickedIdxRef.current !== null || !activePracticeQuestion) return;
+      setPracticePickedIdx(optionIndex);
+      const isCorrect = optionIndex === activePracticeQuestion.correctIndex;
+      playBattleSfx(isCorrect ? "correct" : "wrong", mutedRef.current);
+      setPracticeStats((prev) => ({
+        correct: prev.correct + (isCorrect ? 1 : 0),
+        attempted: prev.attempted + 1,
+        streak: isCorrect ? prev.streak + 1 : 0,
+      }));
+    },
+    [activePracticeQuestion]
+  );
+
+  const getSpectateCandidates = useCallback(() => {
+    const humans = remotePlayersRef.current
+      .filter((p) => p.alive && p.playerId !== currentPlayerId)
+      .map((p) => {
+        const sm = remoteSmoothRef.current.get(p.playerId);
+        return {
+          id: p.playerId,
+          name: p.displayName,
+          kind: "Friend" as const,
+          hp: Math.ceil(p.hp),
+          shield: Math.ceil(p.shield),
+          x: sm ? sm.x : p.x,
+          y: sm ? sm.y : p.y,
+        };
+      });
+    const bots = botsRef.current
+      .filter((b) => b.alive)
+      .map((b) => {
+        const sm = !isHost ? botSmoothRef.current.get(b.id) : null;
+        return {
+          id: b.id,
+          name: b.name,
+          kind: "Bot" as const,
+          hp: Math.ceil(b.hp),
+          shield: Math.ceil(b.shield),
+          x: sm ? sm.x : b.x,
+          y: sm ? sm.y : b.y,
+        };
+      });
+    return [...humans, ...bots];
+  }, [currentPlayerId, isHost]);
+
+  const cycleSpectateTarget = useCallback(
+    (dir: -1 | 1) => {
+      const candidates = getSpectateCandidates();
+      if (candidates.length === 0) return;
+      const curIdx = candidates.findIndex(
+        (c) => c.id === spectateTargetIdRef.current
+      );
+      const nextIdx =
+        curIdx === -1
+          ? 0
+          : (curIdx + dir + candidates.length) % candidates.length;
+      const picked = candidates[nextIdx];
+      spectateTargetIdRef.current = picked.id;
+      setHud((prev) => ({
+        ...prev,
+        spectatingName: picked.name,
+        spectatingKind: picked.kind,
+        spectatingHp: picked.hp,
+        spectatingShield: picked.shield,
+      }));
+    },
+    [getSpectateCandidates]
+  );
+
   // Keyboard Controls
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1917,6 +2074,37 @@ export default function BattleRoyaleCanvas({
       }
 
       const key = e.key.toLowerCase();
+      if (!localRef.current.alive && roomRef.current.status === "active") {
+        if (eliminatedModeRef.current === "practice") {
+          if (key === "1" || key === "2" || key === "3" || key === "4") {
+            e.preventDefault();
+            handleAnswerPractice(Number(key) - 1);
+          } else if (
+            (key === "enter" || key === "arrowright") &&
+            practicePickedIdxRef.current !== null
+          ) {
+            e.preventDefault();
+            handleNextPracticeQuestion();
+          }
+        } else {
+          if (key === "arrowleft" || key === "a") {
+            e.preventDefault();
+            cycleSpectateTarget(-1);
+          } else if (key === "arrowright" || key === "d") {
+            e.preventDefault();
+            cycleSpectateTarget(1);
+          }
+        }
+        if (key === "m" || key === "tab") {
+          e.preventDefault();
+          setShowFullMap((prev) => !prev);
+        } else if (key === "escape" && showFullMapRef.current) {
+          e.preventDefault();
+          setShowFullMap(false);
+        }
+        return;
+      }
+
       if (activePrompt) {
         if (key === "1" || key === "2" || key === "3" || key === "4") {
           e.preventDefault();
@@ -1968,6 +2156,9 @@ export default function BattleRoyaleCanvas({
   }, [
     activePrompt,
     handleAnswerPrompt,
+    handleAnswerPractice,
+    handleNextPracticeQuestion,
+    cycleSpectateTarget,
     openNearbyCrate,
     openNearbyBossQuiz,
     handleUseShieldPotion,
@@ -3037,15 +3228,31 @@ export default function BattleRoyaleCanvas({
           let focusX = local.x;
           let focusY = local.y;
           if (!local.alive) {
-            const liveHuman = remotePlayersRef.current.find(
-              (p) => p.alive && p.playerId !== currentPlayerId
-            );
-            const liveBot = botsRef.current.find((b) => b.alive);
+            const targetId = spectateTargetIdRef.current;
+            const pickedHuman = targetId
+              ? remotePlayersRef.current.find(
+                  (p) => p.alive && p.playerId === targetId && p.playerId !== currentPlayerId
+                )
+              : undefined;
+            const pickedBot = targetId && !pickedHuman
+              ? botsRef.current.find((b) => b.alive && b.id === targetId)
+              : undefined;
+
+            const liveHuman =
+              pickedHuman ||
+              remotePlayersRef.current.find(
+                (p) => p.alive && p.playerId !== currentPlayerId
+              );
+            const liveBot =
+              !liveHuman ? pickedBot || botsRef.current.find((b) => b.alive) : undefined;
+
             if (liveHuman) {
+              spectateTargetIdRef.current = liveHuman.playerId;
               const sm = remoteSmoothRef.current.get(liveHuman.playerId);
               focusX = sm ? sm.x : liveHuman.x;
               focusY = sm ? sm.y : liveHuman.y;
             } else if (liveBot) {
+              spectateTargetIdRef.current = liveBot.id;
               const sm = !isHost ? botSmoothRef.current.get(liveBot.id) : null;
               focusX = sm ? sm.x : liveBot.x;
               focusY = sm ? sm.y : liveBot.y;
@@ -3821,13 +4028,54 @@ export default function BattleRoyaleCanvas({
       // 7. Throttled React HUD Snapshot (~7.5Hz)
       if (now - lastHudUpdateMs >= 130) {
         lastHudUpdateMs = now;
-        const aliveHumans = remotePlayersRef.current.filter((p) =>
-          p.playerId === currentPlayerId ? local.alive : p.alive
-        ).length;
+        const hasLocalInList = remotePlayersRef.current.some(
+          (p) => p.playerId === currentPlayerId
+        );
+        const aliveHumans =
+          remotePlayersRef.current.filter((p) =>
+            p.playerId === currentPlayerId ? local.alive : p.alive
+          ).length + (!hasLocalInList && local.alive ? 1 : 0);
+        const totalHumans =
+          remotePlayersRef.current.length + (hasLocalInList ? 0 : 1);
         const aliveBots = botsRef.current.filter((b) => b.alive).length;
         const aliveCount = aliveHumans + aliveBots;
         aliveCountRef.current = aliveCount;
-        const totalCount = remotePlayersRef.current.length + botsRef.current.length;
+        const totalCount = totalHumans + botsRef.current.length;
+
+        let spectatingName = "";
+        let spectatingKind: "Friend" | "Bot" | null = null;
+        let spectatingHp = 0;
+        let spectatingShield = 0;
+        if (!local.alive) {
+          const targetId = spectateTargetIdRef.current;
+          const specHuman =
+            (targetId
+              ? remotePlayersRef.current.find(
+                  (p) => p.alive && p.playerId === targetId && p.playerId !== currentPlayerId
+                )
+              : undefined) ||
+            remotePlayersRef.current.find(
+              (p) => p.alive && p.playerId !== currentPlayerId
+            );
+          const specBot = !specHuman
+            ? (targetId
+                ? botsRef.current.find((b) => b.alive && b.id === targetId)
+                : undefined) || botsRef.current.find((b) => b.alive)
+            : undefined;
+          if (specHuman) {
+            spectateTargetIdRef.current = specHuman.playerId;
+            spectatingName = specHuman.displayName;
+            spectatingKind = "Friend";
+            spectatingHp = Math.ceil(specHuman.hp);
+            spectatingShield = Math.ceil(specHuman.shield);
+          } else if (specBot) {
+            spectateTargetIdRef.current = specBot.id;
+            spectatingName = specBot.name;
+            spectatingKind = "Bot";
+            spectatingHp = Math.ceil(specBot.hp);
+            spectatingShield = Math.ceil(specBot.shield);
+          }
+        }
 
         let nearestCrate: { crate: ArenaCrate; lockedSec: number } | null = null;
         let minCrateDist = 84;
@@ -3882,7 +4130,7 @@ export default function BattleRoyaleCanvas({
           aliveCount,
           totalCount,
           humanAliveCount: aliveHumans,
-          humanTotalCount: remotePlayersRef.current.length,
+          humanTotalCount: totalHumans,
           miniBozzesAlive: miniBozzesRef.current.filter((m) => m.alive).length,
           biomeName: currentBiome.name,
           biomeSubtitle: currentBiome.subtitle,
@@ -3899,6 +4147,10 @@ export default function BattleRoyaleCanvas({
           nearbyCrate: nearestCrate,
           nearbyBoss: nearestBoss,
           killFeed: killFeedRef.current,
+          spectatingName,
+          spectatingKind,
+          spectatingHp,
+          spectatingShield,
         });
 
         if (
@@ -4467,7 +4719,7 @@ export default function BattleRoyaleCanvas({
         )}
 
         {/* Crate / Terminal / Mini-Bozz Quiz Modal */}
-        {activePrompt && (
+        {activePrompt && hud.alive && (
           <div className="absolute inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-20">
             <div className="w-full max-w-xl bg-[#0B0B10]/95 border border-purple-400/50 rounded-2xl p-6 space-y-4 shadow-2xl animate-reveal-pop">
               <div className="flex items-center justify-between gap-3 text-xs font-mono">
@@ -4544,40 +4796,328 @@ export default function BattleRoyaleCanvas({
           </div>
         )}
 
-        {/* Eliminated Spectating Banner */}
-        {!hud.alive && room.status === "active" && (
-          <div className="absolute inset-x-0 top-16 flex justify-center px-4 pointer-events-none">
-            <div className="pointer-events-auto bg-zinc-950/95 border border-red-500/50 rounded-2xl px-6 py-4 flex flex-wrap items-center gap-4 shadow-2xl">
-              <div className="space-y-0.5">
-                <div className="text-xs font-mono font-bold text-red-400">
-                  ELIMINATED · PLACEMENT #{localRef.current.placement || hud.aliveCount + 1} / {hud.totalCount}
-                </div>
-                <div className="text-xs text-zinc-300">
-                  Spectating · Kills: {hud.kills} · Mini-Bozzes: {hud.miniBozzKills} · Quiz:{" "}
-                  {hud.questionsCorrect}/{hud.questionsAttempted}
+        {/* Eliminated Experience: Practice Study Questions OR Spectate Live + Instant Squad Requeue */}
+        {!hud.alive && room.status === "active" && (() => {
+          const allHumansEliminated = hud.humanTotalCount > 0 && hud.humanAliveCount === 0;
+          const botsRemaining = Math.max(0, hud.aliveCount - hud.humanAliveCount);
+          const myPlacement = localRef.current.placement || Math.max(2, hud.aliveCount + 1);
+          const totalPlayersCount = Math.max(2, hud.totalCount);
+          const buildMatchStats = () => ({
+            placement: myPlacement,
+            totalPlayers: totalPlayersCount,
+            kills: localRef.current.kills,
+            miniBozzKills: localRef.current.miniBozzKills,
+            medallionSecured: localRef.current.hasMedallion,
+            questionsCorrect: localRef.current.questionsCorrect,
+            questionsAttempted: localRef.current.questionsAttempted,
+            winnerName: room.winnerName || "Match In Progress",
+          });
+          const practiceAccuracyPct =
+            practiceStats.attempted > 0
+              ? Math.round((practiceStats.correct / practiceStats.attempted) * 100)
+              : 0;
+
+          if (eliminatedMode === "practice") {
+            return (
+              <div className="absolute inset-0 bg-zinc-950/60 flex items-center justify-center p-4 z-20">
+                <div className="w-full max-w-2xl bg-zinc-950/95 border border-white/15 rounded-2xl p-5 sm:p-6 space-y-4 shadow-2xl">
+                  {/* Top Bar: Elimination Summary + Mode Switcher + Claim Summary */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3.5">
+                    <div className="space-y-0.5">
+                      <div className="text-xs font-mono font-bold text-red-400">
+                        Eliminated · Placement #{myPlacement} / {totalPlayersCount}
+                      </div>
+                      <div className="text-xs font-mono text-zinc-400 tabular-nums">
+                        {allHumansEliminated ? (
+                          <span className="text-amber-300 font-semibold">
+                            All friends eliminated · {botsRemaining} {botsRemaining === 1 ? "bot" : "bots"} remaining
+                          </span>
+                        ) : (
+                          <span className="text-emerald-300 font-semibold">
+                            {hud.humanAliveCount} {hud.humanAliveCount === 1 ? "squadmate" : "squadmates"} still playing
+                          </span>
+                        )}
+                        {" · "}Kills: {hud.kills}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex items-center gap-1 p-1 bg-zinc-900 border border-white/10 rounded-lg">
+                        <button
+                          type="button"
+                          onClick={() => setEliminatedMode("practice")}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold bg-emerald-400 text-zinc-950 whitespace-nowrap shrink-0 cursor-pointer"
+                        >
+                          <BookOpen className="h-3.5 w-3.5" />
+                          <span>Practice Study</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEliminatedMode("spectate")}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold text-zinc-300 hover:text-white hover:bg-zinc-800 whitespace-nowrap shrink-0 cursor-pointer"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                          <span>Spectate Live</span>
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => onMatchComplete(buildMatchStats())}
+                        className="px-3.5 py-2 bg-purple-500 hover:bg-purple-400 text-white font-bold text-xs rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                      >
+                        Claim MMR &amp; Summary
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Instant Squad Requeue Banner when ALL human friends are dead and bots remain */}
+                  {allHumansEliminated && (
+                    <div className="p-3.5 bg-zinc-900/95 border border-emerald-400/35 rounded-xl flex flex-wrap items-center justify-between gap-3">
+                      <div className="text-xs font-mono text-zinc-200">
+                        {isHost
+                          ? "All friends are out — requeue now without watching bots finish:"
+                          : `All friends are out · Waiting for ${room.hostName} to requeue Room ${room.roomCode}`}
+                      </div>
+                      {isHost && onRequeue && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={isRequeueing}
+                            onClick={() => void onRequeue(true, buildMatchStats())}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-400 hover:bg-emerald-300 disabled:opacity-50 text-zinc-950 font-extrabold text-xs rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                          >
+                            <Play className="h-3.5 w-3.5" />
+                            <span>
+                              {isRequeueing
+                                ? "Requeueing..."
+                                : `Instant Re-Drop (${fillWithBots ? "with Bots" : "Friends Only"})`}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isRequeueing}
+                            onClick={() => void onRequeue(false, buildMatchStats())}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 border border-white/15 text-white font-bold text-xs rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                            <span>Requeue to Lobby ({room.roomCode})</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Practice Question Deck from Room Quiz Bank */}
+                  {activePracticeQuestion && (
+                    <div className="space-y-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono text-zinc-400 tabular-nums">
+                        <span>
+                          Practice Question{" "}
+                          {(practiceQuestionIdx % Math.max(1, room.questions.length)) + 1} /{" "}
+                          {room.questions.length}
+                          {activePracticeQuestion.unitTag
+                            ? ` · ${activePracticeQuestion.unitTag}`
+                            : ""}
+                        </span>
+                        <span>
+                          Score: {practiceStats.correct}/{practiceStats.attempted} (
+                          {practiceAccuracyPct}%) · Streak: {practiceStats.streak}
+                        </span>
+                      </div>
+
+                      <h3 className="text-base sm:text-lg font-bold text-white leading-snug">
+                        {activePracticeQuestion.question}
+                      </h3>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        {activePracticeQuestion.options.slice(0, 4).map((opt, idx) => {
+                          const answered = practicePickedIdx !== null;
+                          const isCorrectOpt = idx === activePracticeQuestion.correctIndex;
+                          const isPicked = idx === practicePickedIdx;
+                          let btnClasses =
+                            "bg-zinc-900/90 hover:bg-zinc-800 border-white/15 hover:border-emerald-400/70 text-zinc-100";
+                          if (answered) {
+                            if (isCorrectOpt) {
+                              btnClasses =
+                                "bg-emerald-500/20 border-emerald-400 text-white";
+                            } else if (isPicked) {
+                              btnClasses = "bg-red-500/20 border-red-400 text-red-100";
+                            } else {
+                              btnClasses =
+                                "bg-zinc-950/60 border-white/10 text-zinc-500";
+                            }
+                          }
+                          return (
+                            <button
+                              key={idx}
+                              type="button"
+                              disabled={answered}
+                              onClick={() => handleAnswerPractice(idx)}
+                              className={`text-left p-3.5 rounded-xl border transition-colors flex items-center gap-3 cursor-pointer ${btnClasses}`}
+                            >
+                              <span className="h-7 w-7 rounded-md bg-zinc-950 border border-white/15 font-mono text-xs font-bold text-emerald-300 flex items-center justify-center shrink-0">
+                                {answered && isCorrectOpt ? (
+                                  <Check className="h-4 w-4 text-emerald-400" />
+                                ) : answered && isPicked ? (
+                                  <X className="h-4 w-4 text-red-400" />
+                                ) : (
+                                  `${idx + 1}/${OPTION_LETTERS[idx]}`
+                                )}
+                              </span>
+                              <span className="text-xs font-medium leading-snug flex-1">
+                                {opt}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                        {practicePickedIdx !== null ? (
+                          <div
+                            className={`flex-1 min-w-[220px] p-3 rounded-xl border text-xs space-y-1 ${
+                              practicePickedIdx === activePracticeQuestion.correctIndex
+                                ? "bg-emerald-500/15 border-emerald-400/40 text-emerald-100"
+                                : "bg-red-500/15 border-red-400/40 text-red-100"
+                            }`}
+                          >
+                            <div className="font-mono font-bold">
+                              {practicePickedIdx === activePracticeQuestion.correctIndex
+                                ? "Correct! Keep the streak rolling."
+                                : `Missed · Answer: ${
+                                    OPTION_LETTERS[activePracticeQuestion.correctIndex]
+                                  }`}
+                            </div>
+                            {(activePracticeQuestion.explanation ||
+                              activePracticeQuestion.memoryHook) && (
+                              <p className="opacity-90 leading-relaxed">
+                                {activePracticeQuestion.explanation ||
+                                  activePracticeQuestion.memoryHook}
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="text-[11px] font-mono text-zinc-400">
+                            Press 1-4 or click an answer to drill while your squadmates finish (does not affect match MMR).
+                          </div>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={handleNextPracticeQuestion}
+                          className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-extrabold text-xs rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                        >
+                          <span>
+                            {practicePickedIdx !== null ? "Next Question" : "Skip Question"}
+                          </span>
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() =>
-                  onMatchComplete({
-                    placement: localRef.current.placement || Math.max(2, hud.aliveCount + 1),
-                    totalPlayers: hud.totalCount,
-                    kills: localRef.current.kills,
-                    miniBozzKills: localRef.current.miniBozzKills,
-                    medallionSecured: localRef.current.hasMedallion,
-                    questionsCorrect: localRef.current.questionsCorrect,
-                    questionsAttempted: localRef.current.questionsAttempted,
-                    winnerName: room.winnerName || "Match In Progress",
-                  })
-                }
-                className="px-4 py-2 bg-purple-500 hover:bg-purple-400 text-white font-bold text-xs rounded-xl cursor-pointer whitespace-nowrap"
-              >
-                Claim MMR &amp; Squad Summary
-              </button>
+            );
+          }
+
+          // SPECTATE LIVE MODE
+          return (
+            <div className="absolute inset-x-0 top-14 flex flex-col items-center gap-2.5 px-4 pointer-events-none z-20">
+              <div className="pointer-events-auto w-full max-w-4xl bg-zinc-950/95 border border-white/15 rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-2xl">
+                <div className="flex flex-wrap items-center gap-3 min-w-0">
+                  <div className="space-y-0.5">
+                    <div className="text-xs font-mono font-bold text-red-400">
+                      Eliminated · #{myPlacement} / {totalPlayersCount}
+                    </div>
+                    <div className="text-xs font-mono text-zinc-200 tabular-nums">
+                      {hud.spectatingName ? (
+                        <>
+                          Spectating:{" "}
+                          <strong className="text-white">{hud.spectatingName}</strong> (
+                          {hud.spectatingKind}) · HP {hud.spectatingHp} · SHD{" "}
+                          {hud.spectatingShield}
+                        </>
+                      ) : (
+                        "Spectating Arena"
+                      )}
+                    </div>
+                  </div>
+
+                  {hud.aliveCount > 0 && (
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => cycleSpectateTarget(-1)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 border border-white/15 text-zinc-200 text-xs font-mono rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                        <span>Prev</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => cycleSpectateTarget(1)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 border border-white/15 text-zinc-200 text-xs font-mono rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                      >
+                        <span>Next</span>
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEliminatedMode("practice")}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-extrabold text-xs rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <BookOpen className="h-3.5 w-3.5" />
+                    <span>Practice Questions</span>
+                  </button>
+
+                  {allHumansEliminated && isHost && onRequeue && (
+                    <>
+                      <button
+                        type="button"
+                        disabled={isRequeueing}
+                        onClick={() => void onRequeue(true, buildMatchStats())}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-sky-400 hover:bg-sky-300 disabled:opacity-50 text-zinc-950 font-extrabold text-xs rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                      >
+                        <Play className="h-3.5 w-3.5" />
+                        <span>{isRequeueing ? "Requeueing..." : "Instant Re-Drop"}</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isRequeueing}
+                        onClick={() => void onRequeue(false, buildMatchStats())}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 border border-white/15 text-white font-bold text-xs rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        <span>Requeue ({room.roomCode})</span>
+                      </button>
+                    </>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => onMatchComplete(buildMatchStats())}
+                    className="px-3.5 py-2 bg-purple-500 hover:bg-purple-400 text-white font-bold text-xs rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    Claim MMR &amp; Summary
+                  </button>
+                </div>
+              </div>
+
+              {allHumansEliminated && !isHost && (
+                <div className="pointer-events-auto bg-zinc-950/95 border border-amber-400/40 rounded-xl px-4 py-2 text-xs font-mono text-amber-200 shadow-lg">
+                  All friends eliminated · Waiting for {room.hostName} to requeue Room{" "}
+                  {room.roomCode} (practice questions or spectate while waiting).
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
 
       {/* Controls Strip */}
