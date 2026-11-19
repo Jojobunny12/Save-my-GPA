@@ -312,6 +312,17 @@ export default function TelemetryCommandCenter({
                   type="button"
                   whileHover={MAGNETIC_HOVER}
                   whileTap={BUTTON_TAP}
+                  onClick={() => onNavigate("battle")}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/50 text-emerald-200 font-semibold text-xs rounded-xl cursor-pointer whitespace-nowrap"
+                >
+                  <Swords className="h-4 w-4 text-emerald-400" />
+                  <span>Multiplayer Study Battle</span>
+                </motion.button>
+
+                <motion.button
+                  type="button"
+                  whileHover={MAGNETIC_HOVER}
+                  whileTap={BUTTON_TAP}
                   onClick={() => onNavigate("builder")}
                   className="inline-flex items-center gap-2 px-4 py-2.5 bg-zinc-900 hover:bg-zinc-800 border border-white/10 text-zinc-200 font-semibold text-xs rounded-xl cursor-pointer whitespace-nowrap"
                 >

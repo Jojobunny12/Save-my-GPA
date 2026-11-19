@@ -43,21 +43,21 @@ const MODEL_PIPELINE: ModelPipelineEntry[] = [
   {
     model: "gemini-4-hydrogen",
     thinkingLevel: ThinkingLevel.LOW,
-    firstByteTimeoutMs: 25_000,
-    stallTimeoutMs: 18_000,
-    totalTimeoutMs: 50_000,
+    firstByteTimeoutMs: 35_000,
+    stallTimeoutMs: 22_000,
+    totalTimeoutMs: 60_000,
   },
   {
     model: "gemini-3.1-flash-lite",
     thinkingLevel: ThinkingLevel.MINIMAL,
-    firstByteTimeoutMs: 22_000,
-    stallTimeoutMs: 16_000,
-    totalTimeoutMs: 38_000,
+    firstByteTimeoutMs: 28_000,
+    stallTimeoutMs: 20_000,
+    totalTimeoutMs: 50_000,
   },
 ];
 
 // Overall server budget across retries/failover (safe with NDJSON keepalive streaming)
-const TOTAL_DEADLINE_MS = 85_000;
+const TOTAL_DEADLINE_MS = 110_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -131,12 +131,116 @@ async function collectStreamedText(
   }
 }
 
+function escapeControlCharsInsideStrings(input: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (escaped) {
+      out += ch;
+      escaped = false;
+      continue;
+    }
+    if (inString) {
+      if (ch === "\\") {
+        out += ch;
+        escaped = true;
+      } else if (ch === "\"") {
+        out += ch;
+        inString = false;
+      } else if (ch === "\n") {
+        out += "\\n";
+      } else if (ch === "\r") {
+        out += "\\r";
+      } else if (ch === "\t") {
+        out += "\\t";
+      } else if (ch.charCodeAt(0) < 0x20) {
+        out += " ";
+      } else {
+        out += ch;
+      }
+    } else {
+      if (ch === "\"") {
+        inString = true;
+      }
+      out += ch;
+    }
+  }
+  return out;
+}
+
+function repairTruncatedJson(input: string): string {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inString) {
+      if (ch === "\\") escaped = true;
+      else if (ch === "\"") inString = false;
+    } else {
+      if (ch === "\"") inString = true;
+      else if (ch === "{") stack.push("}");
+      else if (ch === "[") stack.push("]");
+      else if (ch === "}" || ch === "]") stack.pop();
+    }
+  }
+
+  let repaired = input.trimEnd();
+  if (inString) {
+    if (escaped) repaired = repaired.slice(0, -1);
+    repaired += "\"";
+  }
+
+  // Strip trailing comma or dangling key without a value
+  repaired = repaired
+    .replace(/,\s*"[^"]*"\s*:\s*$/, "")
+    .replace(/,\s*$/, "")
+    .replace(/:\s*$/, ": null");
+
+  while (stack.length > 0) {
+    const closer = stack.pop();
+    repaired = repaired.replace(/,\s*$/, "");
+    repaired += closer;
+  }
+
+  return repaired;
+}
+
 function parseGeminiJson(rawText: string): any {
   let cleaned = rawText.trim();
   if (cleaned.startsWith("```")) {
     cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
   }
-  return JSON.parse(cleaned);
+
+  const firstBrace = cleaned.indexOf("{");
+  const firstBracket = cleaned.indexOf("[");
+  if (firstBrace > 0 && (firstBracket === -1 || firstBrace < firstBracket)) {
+    cleaned = cleaned.slice(firstBrace);
+  } else if (firstBracket > 0 && (firstBrace === -1 || firstBracket < firstBrace)) {
+    cleaned = cleaned.slice(firstBracket);
+  }
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // 1. Escape literal newlines/tabs/control chars inside string literals and remove trailing commas
+    const sanitized = escapeControlCharsInsideStrings(cleaned).replace(/,\s*([}\]])/g, "$1");
+    try {
+      return JSON.parse(sanitized);
+    } catch {
+      // 2. Attempt clean closure if stream truncated mid-tail
+      const repaired = repairTruncatedJson(sanitized);
+      return JSON.parse(repaired);
+    }
+  }
 }
 
 type AssessmentTierValue = "definition" | "why_how" | "ap_stimulus";
@@ -348,10 +452,12 @@ async function executeGeminiWithRetry<T>(
         totalTimeoutMs: Math.min(entry.totalTimeoutMs, remaining),
       };
 
+      const attemptStartedAt = Date.now();
       try {
         return await callFn(ai, cappedEntry, `${entry.model}#${attempt + 1}`);
       } catch (err: any) {
         lastError = err;
+        const attemptDuration = Date.now() - attemptStartedAt;
         const msg = String(err?.message || "").toLowerCase();
         const code = Number(err?.status || err?.code || 0);
 
@@ -382,14 +488,21 @@ async function executeGeminiWithRetry<T>(
           msg.includes("rate") ||
           msg.includes("incomplete") ||
           msg.includes("too few") ||
+          msg.includes("unterminated") ||
+          msg.includes("unexpected") ||
           msg.includes("json");
 
         const budgetAfter = TOTAL_DEADLINE_MS - (Date.now() - startedAt);
-        if (isTransient && attempt === 0 && budgetAfter > 22_000) {
-          const backoffMs = Math.min(900, Math.max(0, budgetAfter - 20_000));
-          if (backoffMs > 100) {
-            await new Promise((resolve) => setTimeout(resolve, backoffMs));
-          }
+        // Only retry the same model if the failed attempt returned quickly; otherwise fail over immediately
+        const canRetrySameModel =
+          isTransient &&
+          attempt === 0 &&
+          budgetAfter > 20_000 &&
+          (mIdx === MODEL_PIPELINE.length - 1 || attemptDuration < 16_000);
+
+        if (canRetrySameModel) {
+          const backoffMs = Math.min(800, Math.max(200, budgetAfter - 18_000));
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
           continue;
         }
         if (mIdx < MODEL_PIPELINE.length - 1) {
@@ -558,9 +671,10 @@ MOCK EXAM REQUIREMENTS (EXACTLY 25 questions):
 - MATCHING POOL UNIQUENESS CONSTRAINT: Questions are grouped into sets of 10 (Q1-Q10, Q11-Q20, Q21-Q25) where students match questions to correct answer cards. Within each set of 10 questions (1-10, 11-20, 21-25), ALL 10 correct answer choices MUST be completely distinct values/phrases (never allow two questions in the same 10-question set to have identical correct answer strings like both having "1", "0", or "True").
 - Provide 4 distinct options formatted strictly as ["A) ...", "B) ...", "C) ...", "D) ..."], with correctIndex in 0..3 and 1 crisp, direct sentence explaining the solution.
 
-FORMULA & TONE RULES:
+FORMULA, JSON & CONCISENESS RULES:
 - Use clean, readable plain Unicode math (e.g., "sin²(θ) + cos²(θ) = 1", "log₂(64) = 6", "√(b² - 4ac)", "π/6", "ΔH < 0", "x̅", "p̂"). NEVER use raw LaTeX ($...$, $$...$$, \\frac, \\sqrt, \\bar).
 - Keep the tone focused, sharp, and academic—no slang, memes, or filler jokes.
+- CONCISENESS & VALID JSON: Keep coreCheatSheetMarkdown <= 450 words, each flashcard answer <= 35 words, each quiz option <= 14 words, and each quiz explanation <= 22 words. Always escape newlines inside JSON strings as \\n and never emit unescaped quotes or truncated JSON.
 
 Student Context: ${additionalNotes || "Cumulative semester final review"}
 

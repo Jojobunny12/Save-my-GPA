@@ -25,17 +25,28 @@ import WeaknessRoyaleStudio from "./components/WeaknessRoyaleStudio";
 import FinalBossBattle from "./components/FinalBossBattle";
 import SocraticArenaStudio from "./components/SocraticArenaStudio";
 import DualCodingVisualizer from "./components/DualCodingVisualizer";
+import { StudyBattle, StudyBattleQuestion } from "./components/StudyBattle";
+import firebaseAppletConfig from "../firebase-applet-config.json";
 
 const NAV_ITEMS: Array<{ id: WorkspaceRoute; label: string }> = [
   { id: "command", label: "Command" },
   { id: "builder", label: "Ingest Notes" },
   { id: "recall", label: "Active Recall" },
-  { id: "royale", label: "Weakness Drills" },
   { id: "boss", label: "Boss Battle" },
+  { id: "battle", label: "Study Battle" },
 ];
 
 export default function App() {
-  const [route, setRoute] = useState<WorkspaceRoute>("command");
+  const [urlJoinCode] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    const roomParam = new URLSearchParams(window.location.search).get("room") || "";
+    const cleaned = roomParam.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4);
+    return cleaned.length === 4 ? cleaned : "";
+  });
+
+  const [route, setRoute] = useState<WorkspaceRoute>(() =>
+    urlJoinCode ? "battle" : "command"
+  );
   const [savedDecks, setSavedDecks] = useState<StudyDeck[]>([]);
   const [activeDeck, setActiveDeck] = useState<StudyDeck | null>(null);
   const [deckHubOpen, setDeckHubOpen] = useState(false);
@@ -276,6 +287,17 @@ export default function App() {
               <div className="flex items-center gap-2 font-mono text-[11px]">
                 <button
                   type="button"
+                  onClick={() => navigateTo("royale")}
+                  className={`px-2.5 py-1 rounded-lg border cursor-pointer transition-colors ${
+                    route === "royale"
+                      ? "bg-purple-500/20 border-purple-400 text-purple-200"
+                      : "bg-zinc-950 border-white/10 text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  Weakness Drills
+                </button>
+                <button
+                  type="button"
                   onClick={() => navigateTo("socratic")}
                   className={`px-2.5 py-1 rounded-lg border cursor-pointer transition-colors ${
                     route === "socratic"
@@ -451,6 +473,40 @@ export default function App() {
                     onGoToBuilder={() => navigateTo("builder")}
                   />
                 )}
+              </motion.div>
+            )}
+
+            {route === "battle" && (
+              <motion.div
+                key="route-battle"
+                variants={PANEL_FADE}
+                initial="hidden"
+                animate="visible"
+                exit="exit"
+              >
+                <StudyBattle
+                  initialQuestions={
+                    activeDeck?.quiz && activeDeck.quiz.length > 0
+                      ? activeDeck.quiz.map(
+                          (q): StudyBattleQuestion => ({
+                            question: q.question,
+                            options: q.options.slice(0, 4),
+                            correctIndex: q.correctIndex,
+                            explanation: q.explanation,
+                            unitTag: q.unitTag,
+                          })
+                        )
+                      : undefined
+                  }
+                  initialTitle={
+                    activeDeck
+                      ? `${activeDeck.courseCode}: ${activeDeck.courseName}`
+                      : undefined
+                  }
+                  initialJoinCode={urlJoinCode || undefined}
+                  firebaseConfig={firebaseAppletConfig}
+                  onBack={() => navigateTo("command")}
+                />
               </motion.div>
             )}
 

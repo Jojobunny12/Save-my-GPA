@@ -1,0 +1,205 @@
+{
+  "entities": {
+    "StudyRoom": {
+      "title": "StudyRoom",
+      "description": "A real-time multiplayer Study Battle quiz room identified by a 4-letter uppercase room code.",
+      "type": "object",
+      "properties": {
+        "roomCode": {
+          "type": "string",
+          "description": "Unique 4-letter uppercase room join code.",
+          "minLength": 4,
+          "maxLength": 4,
+          "pattern": "^[A-Z]{4}$"
+        },
+        "hostId": {
+          "type": "string",
+          "description": "Client-generated host identifier for authoritative room control.",
+          "minLength": 6,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "hostName": {
+          "type": "string",
+          "description": "Display name of the host.",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "title": {
+          "type": "string",
+          "description": "Title of the study battle quiz.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "status": {
+          "type": "string",
+          "description": "Current multiplayer quiz phase.",
+          "enum": ["lobby", "question", "leaderboard", "finished"]
+        },
+        "currentQuestionIndex": {
+          "type": "integer",
+          "description": "Zero-based index of the active question."
+        },
+        "questionStartedAtMs": {
+          "type": "number",
+          "description": "Epoch timestamp in milliseconds when the active question timer started."
+        },
+        "questionDurationSec": {
+          "type": "integer",
+          "description": "Countdown duration per question in seconds (15)."
+        },
+        "answersLocked": {
+          "type": "boolean",
+          "description": "Whether answers for the active question are locked by the host."
+        },
+        "questions": {
+          "type": "array",
+          "description": "List of 1 to 50 multiple-choice quiz questions."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the room was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest host state transition."
+        }
+      },
+      "required": [
+        "roomCode",
+        "hostId",
+        "hostName",
+        "title",
+        "status",
+        "currentQuestionIndex",
+        "questionStartedAtMs",
+        "questionDurationSec",
+        "answersLocked",
+        "questions",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StudyPlayer": {
+      "title": "StudyPlayer",
+      "description": "A participant inside a Study Battle room with real-time score and streak.",
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "description": "Unique player identifier within the room.",
+          "minLength": 6,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Player's display name shown in the lobby and podium.",
+          "minLength": 1,
+          "maxLength": 24
+        },
+        "score": {
+          "type": "integer",
+          "description": "Cumulative score awarded by the host."
+        },
+        "streak": {
+          "type": "integer",
+          "description": "Current consecutive correct answers."
+        },
+        "lastPointsEarned": {
+          "type": "integer",
+          "description": "Points earned on the most recently graded question."
+        },
+        "lastAnswerCorrect": {
+          "type": "boolean",
+          "description": "Whether the most recently graded question was answered correctly."
+        },
+        "isHost": {
+          "type": "boolean",
+          "description": "Whether this participant is also playing as the host."
+        },
+        "joinedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the player joined."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest score update."
+        }
+      },
+      "required": [
+        "playerId",
+        "displayName",
+        "score",
+        "streak",
+        "lastPointsEarned",
+        "lastAnswerCorrect",
+        "isHost",
+        "joinedAt",
+        "updatedAt"
+      ]
+    },
+    "StudyAnswer": {
+      "title": "StudyAnswer",
+      "description": "A single player's locked answer submission for a specific question index.",
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "description": "ID of the player submitting the answer.",
+          "minLength": 6,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "questionIndex": {
+          "type": "integer",
+          "description": "Zero-based question index answered."
+        },
+        "selectedIndex": {
+          "type": "integer",
+          "description": "Selected option index (0..3)."
+        },
+        "answeredAtMs": {
+          "type": "number",
+          "description": "Client timestamp when the option was selected."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the answer was recorded."
+        }
+      },
+      "required": [
+        "playerId",
+        "questionIndex",
+        "selectedIndex",
+        "answeredAtMs",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/studyRooms/{roomCode}": {
+      "schema": {
+        "$ref": "#/entities/StudyRoom"
+      },
+      "description": "Live Study Battle rooms keyed by 4-letter uppercase join codes."
+    },
+    "/studyRooms/{roomCode}/players/{playerId}": {
+      "schema": {
+        "$ref": "#/entities/StudyPlayer"
+      },
+      "description": "Players participating in a specific Study Battle room."
+    },
+    "/studyRooms/{roomCode}/answers/{answerId}": {
+      "schema": {
+        "$ref": "#/entities/StudyAnswer"
+      },
+      "description": "Submitted multiple-choice answers per question and player for host grading."
+    }
+  }
+}

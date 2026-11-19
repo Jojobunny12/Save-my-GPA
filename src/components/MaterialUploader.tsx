@@ -413,7 +413,7 @@ export default function MaterialUploader({
 
     try {
       const deckData = await postJsonOrNdjson<any>("/api/analyze-finals-material", payload, {
-        timeoutMs: 92_000,
+        timeoutMs: 120_000,
         onProgress: (msg) => setLiveStatus(msg),
       });
 

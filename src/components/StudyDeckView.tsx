@@ -164,7 +164,7 @@ export default function StudyDeckView({
           units: deck.units && deck.units.length > 0 ? deck.units : courseMeta.units,
           existingQuestions: deck.quiz || [],
         },
-        { timeoutMs: 92_000 }
+        { timeoutMs: 120_000 }
       );
 
       if (!data || !data.quiz || !Array.isArray(data.quiz) || data.quiz.length === 0) {
@@ -648,6 +648,14 @@ export default function StudyDeckView({
           )}
           {onNavigateModule && (
             <>
+              <button
+                type="button"
+                onClick={() => onNavigateModule("battle")}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#0B0B10] border border-emerald-400/45 text-xs font-mono text-emerald-300 hover:border-emerald-400 cursor-pointer whitespace-nowrap"
+              >
+                <Swords className="h-3.5 w-3.5" />
+                <span>Host Study Battle</span>
+              </button>
               <button
                 type="button"
                 onClick={() => onNavigateModule("boss")}

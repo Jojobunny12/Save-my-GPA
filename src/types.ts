@@ -189,5 +189,7 @@ export type WorkspaceRoute =
   | 'recall'
   | 'royale'
   | 'boss'
+  | 'battle'
   | 'socratic'
   | 'map';
+

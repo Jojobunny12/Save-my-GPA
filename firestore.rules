@@ -1,0 +1,231 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Health check probe document for startup connection verification
+    match /test/connection {
+      allow get: if true;
+      allow list, write: if false;
+    }
+
+    // Shared primitive helpers
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 6 && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidRoomCode(code) {
+      return code is string && code.size() == 4 && code.matches('^[A-Z]{4}$');
+    }
+
+    function isValidAnswerId(answerId) {
+      return answerId is string && answerId.size() >= 8 && answerId.size() <= 80 && answerId.matches('^[0-9]+_[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Validation Blueprint: StudyRoom
+    function isValidStudyRoom(data, roomCode) {
+      return data.keys().hasAll([
+          'roomCode', 'hostId', 'hostName', 'title', 'status',
+          'currentQuestionIndex', 'questionStartedAtMs', 'questionDurationSec',
+          'answersLocked', 'questions', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'roomCode', 'hostId', 'hostName', 'title', 'status',
+          'currentQuestionIndex', 'questionStartedAtMs', 'questionDurationSec',
+          'answersLocked', 'questions', 'createdAt', 'updatedAt'
+        ])
+        && data.roomCode == roomCode
+        && isValidRoomCode(data.roomCode)
+        && isValidId(data.hostId)
+        && data.hostName is string && data.hostName.size() >= 1 && data.hostName.size() <= 32
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
+        && data.status in ['lobby', 'question', 'leaderboard', 'finished']
+        && data.currentQuestionIndex is int
+        && data.currentQuestionIndex >= 0
+        && data.questions is list
+        && data.questions.size() >= 1
+        && data.questions.size() <= 50
+        && data.questions[0] is map
+        && data.questions[0].question is string
+        && data.questions[0].options is list
+        && data.currentQuestionIndex < data.questions.size()
+        && data.questionStartedAtMs is number && data.questionStartedAtMs >= 0
+        && data.questionDurationSec is int && data.questionDurationSec >= 5 && data.questionDurationSec <= 60
+        && data.answersLocked is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: StudyPlayer
+    function isValidStudyPlayer(data, playerId) {
+      return data.keys().hasAll([
+          'playerId', 'displayName', 'score', 'streak',
+          'lastPointsEarned', 'lastAnswerCorrect', 'isHost',
+          'joinedAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'playerId', 'displayName', 'score', 'streak',
+          'lastPointsEarned', 'lastAnswerCorrect', 'isHost',
+          'joinedAt', 'updatedAt'
+        ])
+        && data.playerId == playerId
+        && isValidId(data.playerId)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 24
+        && data.score is int && data.score >= 0 && data.score <= 100000
+        && data.streak is int && data.streak >= 0 && data.streak <= 50
+        && data.lastPointsEarned is int && data.lastPointsEarned >= 0 && data.lastPointsEarned <= 1000
+        && data.lastAnswerCorrect is bool
+        && data.isHost is bool
+        && data.joinedAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: StudyAnswer
+    function isValidStudyAnswer(data) {
+      return data.keys().hasAll(['playerId', 'questionIndex', 'selectedIndex', 'answeredAtMs', 'createdAt'])
+        && data.keys().hasOnly(['playerId', 'questionIndex', 'selectedIndex', 'answeredAtMs', 'createdAt'])
+        && isValidId(data.playerId)
+        && data.questionIndex is int && data.questionIndex >= 0 && data.questionIndex < 50
+        && data.selectedIndex is int && data.selectedIndex >= 0 && data.selectedIndex <= 3
+        && data.answeredAtMs is number && data.answeredAtMs >= 0
+        && data.createdAt is timestamp;
+    }
+
+    match /studyRooms/{roomCode} {
+      // Only fetch by exact 4-letter uppercase roomCode; block global list scraping
+      allow get: if isValidRoomCode(roomCode);
+      allow list: if false;
+
+      allow create: if isValidRoomCode(roomCode)
+        && isValidStudyRoom(incoming(), roomCode)
+        && incoming().status == 'lobby'
+        && incoming().currentQuestionIndex == 0
+        && incoming().answersLocked == false
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidRoomCode(roomCode)
+        && isValidStudyRoom(incoming(), roomCode)
+        && existing().status != 'finished'
+        && incoming().roomCode == existing().roomCode
+        && incoming().hostId == existing().hostId
+        && incoming().hostName == existing().hostName
+        && incoming().title == existing().title
+        && incoming().questions == existing().questions
+        && incoming().questionDurationSec == existing().questionDurationSec
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action: Start first question from lobby
+          (
+            existing().status == 'lobby'
+            && incoming().status == 'question'
+            && incoming().currentQuestionIndex == 0
+            && incoming().answersLocked == false
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'currentQuestionIndex', 'questionStartedAtMs', 'answersLocked', 'updatedAt'
+            ])
+          )
+          ||
+          // Action: Advance to next question from leaderboard
+          (
+            existing().status == 'leaderboard'
+            && incoming().status == 'question'
+            && incoming().currentQuestionIndex == existing().currentQuestionIndex + 1
+            && incoming().answersLocked == false
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'currentQuestionIndex', 'questionStartedAtMs', 'answersLocked', 'updatedAt'
+            ])
+          )
+          ||
+          // Action: Lock answers during active question
+          (
+            existing().status == 'question'
+            && incoming().status == 'question'
+            && incoming().answersLocked == true
+            && incoming().currentQuestionIndex == existing().currentQuestionIndex
+            && incoming().diff(existing()).affectedKeys().hasOnly(['answersLocked', 'updatedAt'])
+          )
+          ||
+          // Action: Reveal round leaderboard from question
+          (
+            existing().status == 'question'
+            && incoming().status == 'leaderboard'
+            && incoming().answersLocked == true
+            && incoming().currentQuestionIndex == existing().currentQuestionIndex
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'answersLocked', 'updatedAt'])
+          )
+          ||
+          // Action: Finish session from leaderboard
+          (
+            existing().status == 'leaderboard'
+            && incoming().status == 'finished'
+            && incoming().currentQuestionIndex == existing().currentQuestionIndex
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+        );
+
+      allow delete: if false;
+
+      match /players/{playerId} {
+        allow get, list: if isValidRoomCode(roomCode);
+
+        allow create: if isValidRoomCode(roomCode)
+          && isValidId(playerId)
+          && isValidStudyPlayer(incoming(), playerId)
+          && incoming().score == 0
+          && incoming().streak == 0
+          && incoming().lastPointsEarned == 0
+          && incoming().lastAnswerCorrect == false
+          && incoming().joinedAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/studyRooms/$(roomCode))
+          && get(/databases/$(database)/documents/studyRooms/$(roomCode)).data.status == 'lobby';
+
+        allow update: if isValidRoomCode(roomCode)
+          && isValidId(playerId)
+          && isValidStudyPlayer(incoming(), playerId)
+          && incoming().playerId == existing().playerId
+          && incoming().displayName == existing().displayName
+          && incoming().isHost == existing().isHost
+          && incoming().joinedAt == existing().joinedAt
+          && incoming().score >= existing().score
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'score', 'streak', 'lastPointsEarned', 'lastAnswerCorrect', 'updatedAt'
+          ])
+          && get(/databases/$(database)/documents/studyRooms/$(roomCode)).data.status != 'finished';
+
+        allow delete: if false;
+      }
+
+      match /answers/{answerId} {
+        allow get, list: if isValidRoomCode(roomCode);
+
+        allow create: if isValidRoomCode(roomCode)
+          && isValidAnswerId(answerId)
+          && isValidStudyAnswer(incoming())
+          && answerId == string(incoming().questionIndex) + '_' + incoming().playerId
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/studyRooms/$(roomCode))
+          && exists(/databases/$(database)/documents/studyRooms/$(roomCode)/players/$(incoming().playerId))
+          && get(/databases/$(database)/documents/studyRooms/$(roomCode)).data.status == 'question'
+          && get(/databases/$(database)/documents/studyRooms/$(roomCode)).data.answersLocked == false
+          && incoming().questionIndex == get(/databases/$(database)/documents/studyRooms/$(roomCode)).data.currentQuestionIndex;
+
+        allow update, delete: if false;
+      }
+    }
+  }
+}
