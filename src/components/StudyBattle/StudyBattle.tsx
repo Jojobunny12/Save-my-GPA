@@ -434,6 +434,12 @@ function StudyBattleInner({
   const [room, setRoom] = useState<StudyRoomDocument | null>(null);
   const [players, setPlayers] = useState<StudyPlayerDocument[]>([]);
   const [worldState, setWorldState] = useState<StudyWorldStateDocument | null>(null);
+  const latestPlayersRef = useRef<StudyPlayerDocument[]>([]);
+  const latestWorldRef = useRef<StudyWorldStateDocument | null>(null);
+  const roomStatusRef = useRef<string | null>(null);
+  const lastRosterSigRef = useRef<string>("");
+  const livePlayersListenerRef = useRef<((p: StudyPlayerDocument[]) => void) | null>(null);
+  const liveWorldListenerRef = useRef<((w: StudyWorldStateDocument | null) => void) | null>(null);
 
   const [isBusy, setIsBusy] = useState(false);
   const [isCalibrating, setIsCalibrating] = useState(false);
@@ -504,6 +510,25 @@ function StudyBattleInner({
     [questionsJson]
   );
 
+  const registerLiveStream = useCallback(
+    (handlers: {
+      onPlayers: (p: StudyPlayerDocument[]) => void;
+      onWorld: (w: StudyWorldStateDocument | null) => void;
+    }) => {
+      livePlayersListenerRef.current = handlers.onPlayers;
+      liveWorldListenerRef.current = handlers.onWorld;
+      return () => {
+        if (livePlayersListenerRef.current === handlers.onPlayers) {
+          livePlayersListenerRef.current = null;
+        }
+        if (liveWorldListenerRef.current === handlers.onWorld) {
+          liveWorldListenerRef.current = null;
+        }
+      };
+    },
+    []
+  );
+
   // Real-time Firestore room + players + world/state subscription
   useEffect(() => {
     if (!activeRoomCode) return;
@@ -512,9 +537,36 @@ function StudyBattleInner({
     try {
       const db = getStudyBattleDb(firebaseConfig);
       unsubscribe = subscribeToBattleRoom(db, activeRoomCode, {
-        onRoom: (nextRoom) => setRoom(nextRoom),
-        onPlayers: (nextPlayers) => setPlayers(nextPlayers),
-        onWorld: (nextWorld) => setWorldState(nextWorld),
+        onRoom: (nextRoom) => {
+          const prevStatus = roomStatusRef.current;
+          roomStatusRef.current = nextRoom?.status || null;
+          setRoom(nextRoom);
+          if (nextRoom?.status !== "active" && prevStatus === "active") {
+            setPlayers(latestPlayersRef.current);
+            setWorldState(latestWorldRef.current);
+          }
+        },
+        onPlayers: (nextPlayers) => {
+          latestPlayersRef.current = nextPlayers;
+          livePlayersListenerRef.current?.(nextPlayers);
+          const rosterSig = nextPlayers
+            .map((p) => `${p.playerId}:${p.alive ? 1 : 0}:${p.displayName}`)
+            .join("|");
+          if (
+            roomStatusRef.current !== "active" ||
+            rosterSig !== lastRosterSigRef.current
+          ) {
+            lastRosterSigRef.current = rosterSig;
+            setPlayers(nextPlayers);
+          }
+        },
+        onWorld: (nextWorld) => {
+          latestWorldRef.current = nextWorld;
+          liveWorldListenerRef.current?.(nextWorld);
+          if (roomStatusRef.current !== "active") {
+            setWorldState(nextWorld);
+          }
+        },
         onError: (err) => {
           let msg = err.message;
           try {
@@ -799,8 +851,10 @@ function StudyBattleInner({
 
       try {
         const db = getStudyBattleDb(firebaseConfig);
+        const curPlayers =
+          latestPlayersRef.current.length > 0 ? latestPlayersRef.current : players;
         const activeName =
-          players.find((p) => p.playerId === playerId)?.displayName ||
+          curPlayers.find((p) => p.playerId === playerId)?.displayName ||
           hostName ||
           playerName;
         const { profile: updatedProfile, summary } = await recordMatchRankResult({
@@ -839,7 +893,9 @@ function StudyBattleInner({
   const handleRequeue = async (immediateLaunch: boolean) => {
     if (!room || !isHost) return;
     setErrorMsg(null);
-    if (immediateLaunch && !fillWithBots && players.length < 2) {
+    const curPlayers =
+      latestPlayersRef.current.length > 0 ? latestPlayersRef.current : players;
+    if (immediateLaunch && !fillWithBots && curPlayers.length < 2) {
       setErrorMsg(
         "Friends-Only instant re-drop needs at least 2 players in the room. Requeue to Lobby or turn AI Bots Backfill on."
       );
@@ -852,7 +908,7 @@ function StudyBattleInner({
       await hostRequeueRoyaleRoom({
         db,
         room,
-        players,
+        players: curPlayers,
         immediateLaunch,
         fillWithBots,
       });
@@ -872,6 +928,10 @@ function StudyBattleInner({
     setRoom(null);
     setPlayers([]);
     setWorldState(null);
+    latestPlayersRef.current = [];
+    latestWorldRef.current = null;
+    roomStatusRef.current = null;
+    lastRosterSigRef.current = "";
     setMatchResult(null);
     setErrorMsg(null);
     setIsRequeueing(false);
@@ -1106,14 +1166,15 @@ function StudyBattleInner({
           <BattleRoyaleCanvas
             db={db}
             room={room}
-            players={players}
-            worldState={worldState}
+            players={latestPlayersRef.current.length > 0 ? latestPlayersRef.current : players}
+            worldState={latestWorldRef.current ?? worldState}
             currentPlayerId={playerId}
             isHost={isHost}
             muted={muted}
             onToggleMute={() => setMuted((m) => !m)}
             onLeaveRoom={handleLeaveRoom}
             onMatchComplete={handleMatchComplete}
+            registerLiveStream={registerLiveStream}
           />
         </div>
       );

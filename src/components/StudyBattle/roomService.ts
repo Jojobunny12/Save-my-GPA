@@ -964,22 +964,64 @@ export async function publishWorldPatch(params: {
   db: Firestore;
   roomCode: string;
   addFirewall?: FirewallWall;
+  firewallsToAdd?: FirewallWall[];
   crateState?: SyncedCrateState;
+  crateStates?: SyncedCrateState[];
   miniBozzDamage?: { id: string; hp: number; shield: number; alive: boolean };
+  miniBozzDamages?: { id: string; hp: number; shield: number; alive: boolean }[];
   botDamage?: { id: string; hp: number; shield: number; alive: boolean; placement?: number };
+  botDamages?: { id: string; hp: number; shield: number; alive: boolean; placement?: number }[];
   killFeedEntry?: string;
+  killFeedEntries?: string[];
 }): Promise<void> {
   const {
     db,
     roomCode,
     addFirewall,
+    firewallsToAdd,
     crateState,
+    crateStates,
     miniBozzDamage,
+    miniBozzDamages,
     botDamage,
+    botDamages,
     killFeedEntry,
+    killFeedEntries,
   } = params;
   const worldRef = doc(db, "studyRooms", roomCode, "world", "state");
   const now = Date.now();
+
+  const allWallAdds = [
+    ...(addFirewall ? [addFirewall] : []),
+    ...(firewallsToAdd || []),
+  ];
+  const allCrateAdds = [
+    ...(crateState ? [crateState] : []),
+    ...(crateStates || []),
+  ];
+  const allBossDmgs = [
+    ...(miniBozzDamage ? [miniBozzDamage] : []),
+    ...(miniBozzDamages || []),
+  ];
+  const allBotDmgs = [
+    ...(botDamage ? [botDamage] : []),
+    ...(botDamages || []),
+  ];
+  const allFeedAdds = [
+    ...(killFeedEntry ? [killFeedEntry] : []),
+    ...(killFeedEntries || []),
+  ];
+
+  if (
+    allWallAdds.length === 0 &&
+    allCrateAdds.length === 0 &&
+    allBossDmgs.length === 0 &&
+    allBotDmgs.length === 0 &&
+    allFeedAdds.length === 0
+  ) {
+    return;
+  }
+
   try {
     await runTransaction(db, async (tx) => {
       const snap = await tx.get(worldRef);
@@ -989,58 +1031,81 @@ export async function publishWorldPatch(params: {
       let nextFirewalls = (cur.firewalls || []).filter(
         (fw) => fw.hp > 0 && fw.expiresAtMs > now
       );
-      if (addFirewall && !nextFirewalls.some((fw) => fw.id === addFirewall.id)) {
-        nextFirewalls = [...nextFirewalls, addFirewall].slice(-24);
+      for (const fw of allWallAdds) {
+        if (!nextFirewalls.some((existing) => existing.id === fw.id)) {
+          nextFirewalls.push(fw);
+        }
       }
+      nextFirewalls = nextFirewalls.slice(-24);
 
       let nextCrates = (cur.crateStates || []).filter(
         (c) => c.lockedUntilMs > now || c.depletedUntilMs > now
       );
-      if (crateState) {
-        nextCrates = [
-          ...nextCrates.filter((c) => c.crateId !== crateState.crateId),
-          crateState,
-        ].slice(-60);
+      if (allCrateAdds.length > 0) {
+        const crateMap = new Map<string, SyncedCrateState>();
+        for (const c of nextCrates) crateMap.set(c.crateId, c);
+        for (const c of allCrateAdds) crateMap.set(c.crateId, c);
+        nextCrates = Array.from(crateMap.values()).slice(-60);
       }
 
       let nextMiniBozzes = cur.miniBozzes || [];
-      if (miniBozzDamage) {
+      if (allBossDmgs.length > 0) {
+        const dmgMap = new Map<string, { id: string; hp: number; shield: number; alive: boolean }>();
+        for (const d of allBossDmgs) {
+          const prev = dmgMap.get(d.id);
+          if (!prev || d.hp + d.shield < prev.hp + prev.shield || !d.alive) {
+            dmgMap.set(d.id, d);
+          }
+        }
         nextMiniBozzes = nextMiniBozzes.map((mb) => {
-          if (mb.id !== miniBozzDamage.id) return mb;
+          const inc = dmgMap.get(mb.id);
+          if (!inc) return mb;
           const curEhp = mb.hp + mb.shield;
-          const incEhp = miniBozzDamage.hp + miniBozzDamage.shield;
-          return incEhp < curEhp || (!miniBozzDamage.alive && mb.alive)
+          const incEhp = inc.hp + inc.shield;
+          return incEhp < curEhp || (!inc.alive && mb.alive)
             ? {
                 ...mb,
-                hp: Math.max(0, miniBozzDamage.hp),
-                shield: Math.max(0, miniBozzDamage.shield),
-                alive: mb.alive && miniBozzDamage.alive,
+                hp: Math.max(0, Math.round(inc.hp)),
+                shield: Math.max(0, Math.round(inc.shield)),
+                alive: mb.alive && inc.alive,
               }
             : mb;
         });
       }
 
       let nextBots = cur.bots || [];
-      if (botDamage) {
+      if (allBotDmgs.length > 0) {
+        const dmgMap = new Map<
+          string,
+          { id: string; hp: number; shield: number; alive: boolean; placement?: number }
+        >();
+        for (const d of allBotDmgs) {
+          const prev = dmgMap.get(d.id);
+          if (!prev || d.hp + d.shield < prev.hp + prev.shield || !d.alive) {
+            dmgMap.set(d.id, d);
+          }
+        }
         nextBots = nextBots.map((b) => {
-          if (b.id !== botDamage.id) return b;
+          const inc = dmgMap.get(b.id);
+          if (!inc) return b;
           const curEhp = b.hp + b.shield;
-          const incEhp = botDamage.hp + botDamage.shield;
-          return incEhp < curEhp || (!botDamage.alive && b.alive)
+          const incEhp = inc.hp + inc.shield;
+          return incEhp < curEhp || (!inc.alive && b.alive)
             ? {
                 ...b,
-                hp: Math.max(0, botDamage.hp),
-                shield: Math.max(0, botDamage.shield),
-                alive: b.alive && botDamage.alive,
-                placement: botDamage.alive ? b.placement : botDamage.placement || b.placement,
+                hp: Math.max(0, Math.round(inc.hp)),
+                shield: Math.max(0, Math.round(inc.shield)),
+                alive: b.alive && inc.alive,
+                placement: inc.alive ? b.placement : inc.placement || b.placement,
               }
             : b;
         });
       }
 
-      const nextFeed = killFeedEntry
-        ? [killFeedEntry, ...(cur.killFeed || [])].slice(0, 10)
-        : (cur.killFeed || []).slice(0, 10);
+      const nextFeed =
+        allFeedAdds.length > 0
+          ? [...allFeedAdds, ...(cur.killFeed || [])].slice(0, 10)
+          : (cur.killFeed || []).slice(0, 10);
 
       tx.set(worldRef, {
         bots: nextBots.slice(0, 20),
@@ -1067,10 +1132,34 @@ export async function syncWorldState(params: {
 }): Promise<void> {
   const { db, roomCode, bots, miniBozzes, firewalls, crateStates, killFeed } = params;
   const path = `studyRooms/${roomCode}/world/state`;
+  const compactBots: BotState[] = bots.slice(0, 20).map((b) => ({
+    ...b,
+    x: Math.round(b.x),
+    y: Math.round(b.y),
+    aimAngle: Number.isFinite(b.aimAngle) ? Number(b.aimAngle.toFixed(2)) : 0,
+    hp: Math.max(0, Math.round(b.hp)),
+    shield: Math.max(0, Math.round(b.shield)),
+    lastShotX: Math.round(b.lastShotX),
+    lastShotY: Math.round(b.lastShotY),
+    lastShotVx: Math.round(b.lastShotVx),
+    lastShotVy: Math.round(b.lastShotVy),
+  }));
+  const compactBosses: MiniBozzState[] = miniBozzes.slice(0, 4).map((mb) => ({
+    ...mb,
+    x: Math.round(mb.x),
+    y: Math.round(mb.y),
+    aimAngle: Number.isFinite(mb.aimAngle) ? Number(mb.aimAngle.toFixed(2)) : 0,
+    hp: Math.max(0, Math.round(mb.hp)),
+    shield: Math.max(0, Math.round(mb.shield)),
+    lastShotX: Math.round(mb.lastShotX),
+    lastShotY: Math.round(mb.lastShotY),
+    lastShotVx: Math.round(mb.lastShotVx),
+    lastShotVy: Math.round(mb.lastShotVy),
+  }));
   try {
     await setDoc(doc(db, "studyRooms", roomCode, "world", "state"), {
-      bots: bots.slice(0, 20),
-      miniBozzes: miniBozzes.slice(0, 4),
+      bots: compactBots,
+      miniBozzes: compactBosses,
       firewalls: firewalls.slice(0, 24),
       crateStates: crateStates.slice(0, 60),
       killFeed: killFeed.slice(0, 10),

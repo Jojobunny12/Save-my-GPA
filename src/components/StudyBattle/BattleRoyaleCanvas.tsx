@@ -84,6 +84,10 @@ interface BattleRoyaleCanvasProps {
     questionsAttempted: number;
     winnerName: string;
   }) => void;
+  registerLiveStream?: (handlers: {
+    onPlayers: (p: StudyPlayerDocument[]) => void;
+    onWorld: (w: StudyWorldStateDocument | null) => void;
+  }) => () => void;
 }
 
 interface FloatingParticle {
@@ -266,10 +270,101 @@ function encodeShotId(
   return `s_${ts}_${rnd}|${ARCH_CODE[archetype]}:${Math.round(damage)}:${rarity[0]}`.slice(0, 48);
 }
 
+interface SmoothEntity {
+  x: number;
+  y: number;
+  aimAngle: number;
+  targetX: number;
+  targetY: number;
+  targetAim: number;
+  vx: number;
+  vy: number;
+  lastPacketMs: number;
+}
+
 function lerpAngle(current: number, target: number, t: number): number {
   let diff = ((target - current + Math.PI) % (Math.PI * 2)) - Math.PI;
   if (diff < -Math.PI) diff += Math.PI * 2;
   return current + diff * t;
+}
+
+function upsertSmoothEntity(
+  map: Map<string, SmoothEntity>,
+  id: string,
+  x: number,
+  y: number,
+  aimAngle: number,
+  now: number
+) {
+  const existing = map.get(id);
+  if (!existing) {
+    map.set(id, {
+      x,
+      y,
+      aimAngle,
+      targetX: x,
+      targetY: y,
+      targetAim: aimAngle,
+      vx: 0,
+      vy: 0,
+      lastPacketMs: now,
+    });
+    return;
+  }
+  const distJump = Math.hypot(x - existing.targetX, y - existing.targetY);
+  if (distJump > 320) {
+    existing.x = x;
+    existing.y = y;
+    existing.targetX = x;
+    existing.targetY = y;
+    existing.vx = 0;
+    existing.vy = 0;
+    existing.aimAngle = aimAngle;
+    existing.targetAim = aimAngle;
+    existing.lastPacketMs = now;
+    return;
+  }
+  const elapsedSec = Math.max(0.06, Math.min(0.8, (now - existing.lastPacketMs) / 1000));
+  let vx = (x - existing.targetX) / elapsedSec;
+  let vy = (y - existing.targetY) / elapsedSec;
+  const spd = Math.hypot(vx, vy);
+  if (spd > 420) {
+    vx = (vx / spd) * 420;
+    vy = (vy / spd) * 420;
+  }
+  existing.vx = existing.vx * 0.35 + vx * 0.65;
+  existing.vy = existing.vy * 0.35 + vy * 0.65;
+  existing.targetX = x;
+  existing.targetY = y;
+  existing.targetAim = aimAngle;
+  existing.lastPacketMs = now;
+}
+
+function stepSmoothMap(
+  map: Map<string, SmoothEntity>,
+  dt: number,
+  now: number,
+  aimSpeed = 16
+) {
+  const posFactor = Math.min(1, dt * 16);
+  const aimFactor = Math.min(1, dt * aimSpeed);
+  for (const sm of map.values()) {
+    const ageMs = now - sm.lastPacketMs;
+    if (ageMs < 360) {
+      const decay = Math.max(0, 1 - ageMs / 380);
+      sm.targetX = Math.max(
+        20,
+        Math.min(ARENA_SIZE - 20, sm.targetX + sm.vx * dt * decay)
+      );
+      sm.targetY = Math.max(
+        20,
+        Math.min(ARENA_SIZE - 20, sm.targetY + sm.vy * dt * decay)
+      );
+    }
+    sm.x += (sm.targetX - sm.x) * posFactor;
+    sm.y += (sm.targetY - sm.y) * posFactor;
+    sm.aimAngle = lerpAngle(sm.aimAngle, sm.targetAim, aimFactor);
+  }
 }
 
 function decodeShotId(shotId: string): {
@@ -300,6 +395,7 @@ export default function BattleRoyaleCanvas({
   onToggleMute,
   onLeaveRoom,
   onMatchComplete,
+  registerLiveStream,
 }: BattleRoyaleCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const minimapRef = useRef<HTMLCanvasElement | null>(null);
@@ -360,15 +456,9 @@ export default function BattleRoyaleCanvas({
   });
 
   const remotePlayersRef = useRef<StudyPlayerDocument[]>(players);
-  const remoteSmoothRef = useRef<
-    Map<string, { x: number; y: number; aimAngle: number }>
-  >(new Map());
-  const botSmoothRef = useRef<
-    Map<string, { x: number; y: number; aimAngle: number }>
-  >(new Map());
-  const bossSmoothRef = useRef<
-    Map<string, { x: number; y: number; aimAngle: number }>
-  >(new Map());
+  const remoteSmoothRef = useRef<Map<string, SmoothEntity>>(new Map());
+  const botSmoothRef = useRef<Map<string, SmoothEntity>>(new Map());
+  const bossSmoothRef = useRef<Map<string, SmoothEntity>>(new Map());
   const prevRemoteAliveRef = useRef<Map<string, boolean>>(new Map());
   const lastHitRemoteAtRef = useRef<Map<string, number>>(new Map());
   const recentBotHitAtRef = useRef<Map<string, number>>(new Map());
@@ -379,6 +469,28 @@ export default function BattleRoyaleCanvas({
   const syncNowRef = useRef<boolean>(false);
   const playerSyncInFlightRef = useRef<boolean>(false);
   const playerSyncPendingRef = useRef<boolean>(false);
+  const worldSyncInFlightRef = useRef<boolean>(false);
+  const lastSentPlayerSigRef = useRef<string>("");
+  const patchFlushInFlightRef = useRef<boolean>(false);
+  const lastPatchFlushMsRef = useRef<number>(0);
+  const pendingPatchRef = useRef<{
+    botDamages: Map<
+      string,
+      { id: string; hp: number; shield: number; alive: boolean; placement?: number }
+    >;
+    miniBozzDamages: Map<string, { id: string; hp: number; shield: number; alive: boolean }>;
+    crateStates: Map<string, SyncedCrateState>;
+    firewalls: FirewallWall[];
+    killFeedEntries: string[];
+  }>({
+    botDamages: new Map(),
+    miniBozzDamages: new Map(),
+    crateStates: new Map(),
+    firewalls: [],
+    killFeedEntries: [],
+  });
+  const terrainCacheRef = useRef<HTMLCanvasElement | null>(null);
+  const minimapCacheRef = useRef<HTMLCanvasElement | null>(null);
   const spawnSyncedRef = useRef<boolean>(Boolean(meFromRoom));
   const canvasSizeRef = useRef<{ cw: number; ch: number; dpr: number }>({
     cw: 960,
@@ -520,13 +632,15 @@ export default function BattleRoyaleCanvas({
     if (!canvas) return;
     const syncDims = () => {
       const rect = canvas.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
       const cw = Math.max(320, Math.floor(rect.width));
       const ch = Math.max(240, Math.floor(rect.height));
       canvasSizeRef.current = { cw, ch, dpr };
-      if (canvas.width !== cw * dpr || canvas.height !== ch * dpr) {
-        canvas.width = cw * dpr;
-        canvas.height = ch * dpr;
+      const targetW = Math.round(cw * dpr);
+      const targetH = Math.round(ch * dpr);
+      if (canvas.width !== targetW || canvas.height !== targetH) {
+        canvas.width = targetW;
+        canvas.height = targetH;
       }
     };
     syncDims();
@@ -536,141 +650,445 @@ export default function BattleRoyaleCanvas({
     return () => observer.disconnect();
   }, []);
 
+  // Pre-render all static arena geometry & minimap base once per layout to boost non-host FPS
   useEffect(() => {
-    remotePlayersRef.current = players;
-    const now = Date.now();
-    for (const p of players) {
-      if (p.playerId === currentPlayerId) continue;
+    if (typeof document === "undefined") return;
 
-      if (!remoteSmoothRef.current.has(p.playerId)) {
-        remoteSmoothRef.current.set(p.playerId, {
-          x: p.x,
-          y: p.y,
-          aimAngle: p.aimAngle,
-        });
-      }
+    const terrain = document.createElement("canvas");
+    terrain.width = ARENA_SIZE;
+    terrain.height = ARENA_SIZE;
+    const tctx = terrain.getContext("2d");
+    if (tctx) {
+      tctx.fillStyle = "#06080D";
+      tctx.fillRect(0, 0, ARENA_SIZE, ARENA_SIZE);
 
-      const prevAlive = prevRemoteAliveRef.current.get(p.playerId);
-      if (prevAlive === true && !p.alive) {
-        const hitAt = lastHitRemoteAtRef.current.get(p.playerId) || 0;
-        if (
-          now - hitAt < 3500 &&
-          !creditedHumanKillsRef.current.has(p.playerId)
-        ) {
-          creditedHumanKillsRef.current.add(p.playerId);
-          const local = localRef.current;
-          local.kills += 1;
-          local.shield = Math.min(100, local.shield + 20);
-          local.hp = Math.min(100, local.hp + 10);
-          local.tokens = Math.min(12, local.tokens + 1);
-          playBattleSfx("elim", mutedRef.current);
-          spawnLabel(local.x, local.y, `ELIMINATED ${p.displayName}! +20 SHD`, "#10B981");
+      for (const biome of layout.biomes) {
+        if (biome.kind === "rotunda") continue;
+        tctx.fillStyle = biome.floorColor;
+        tctx.fillRect(biome.x, biome.y, biome.w, biome.h);
+
+        if (biome.kind === "library") {
+          tctx.strokeStyle = "rgba(167, 139, 250, 0.06)";
+          tctx.lineWidth = 1;
+          for (let py = biome.y; py <= biome.y + biome.h; py += 44) {
+            tctx.beginPath();
+            tctx.moveTo(biome.x, py);
+            tctx.lineTo(biome.x + biome.w, py);
+            tctx.stroke();
+          }
+        } else if (biome.kind === "stadium") {
+          tctx.strokeStyle = "rgba(56, 189, 248, 0.14)";
+          tctx.lineWidth = 22;
+          tctx.beginPath();
+          tctx.ellipse(520, 1840, 310, 210, 0, 0, Math.PI * 2);
+          tctx.stroke();
+        } else if (biome.kind === "lab") {
+          tctx.strokeStyle = "rgba(251, 191, 36, 0.065)";
+          tctx.lineWidth = 1;
+          for (let px = biome.x; px <= biome.x + biome.w; px += 64) {
+            tctx.beginPath();
+            tctx.moveTo(px, biome.y);
+            tctx.lineTo(px, biome.y + biome.h);
+            tctx.stroke();
+          }
         }
       }
-      prevRemoteAliveRef.current.set(p.playerId, p.alive);
 
-      const prevShot = lastEntityShotIdRef.current.get(p.playerId);
-      if (p.lastShotId && p.lastShotId !== prevShot) {
-        lastEntityShotIdRef.current.set(p.playerId, p.lastShotId);
-        const isFreshInitial = prevShot !== undefined || Math.abs(now - p.lastShotAtMs) < 2500;
-        if (isFreshInitial && !seenShotIdsRef.current.has(p.lastShotId)) {
-          seenShotIdsRef.current.add(p.lastShotId);
-          const decoded = decodeShotId(p.lastShotId);
-          const weaponCfg = WEAPON_META[decoded.archetype];
-          const estLagSec = Math.max(0, Math.min(0.14, (now - p.lastShotAtMs) / 1000));
-          const lifeTrim = Math.max(0, Math.min(220, now - p.lastShotAtMs));
-          const maxLife = Math.max(350, (weaponCfg.maxLifeMs || 1100) - lifeTrim);
+      // Bozz Citadel Center Plaza
+      const center = ARENA_SIZE / 2;
+      tctx.fillStyle = "#160F24";
+      tctx.beginPath();
+      tctx.arc(center, center, 315, 0, Math.PI * 2);
+      tctx.fill();
+      tctx.strokeStyle = "rgba(244, 63, 94, 0.28)";
+      tctx.lineWidth = 3;
+      tctx.stroke();
 
-          if (decoded.archetype === "scatter") {
-            const baseAng = Math.atan2(p.lastShotVy, p.lastShotVx);
-            const spd = Math.hypot(p.lastShotVx, p.lastShotVy) || weaponCfg.speed;
-            for (let i = 0; i < weaponCfg.pellets; i++) {
-              const offset =
-                ((i / Math.max(1, weaponCfg.pellets - 1)) - 0.5) * weaponCfg.spreadRad;
-              const vx = Math.cos(baseAng + offset) * spd;
-              const vy = Math.sin(baseAng + offset) * spd;
+      tctx.strokeStyle = "rgba(167, 139, 250, 0.16)";
+      tctx.lineWidth = 2;
+      tctx.beginPath();
+      tctx.arc(center, center, 175, 0, Math.PI * 2);
+      tctx.stroke();
+
+      // Tactical Grid
+      const tileSize = 100;
+      tctx.strokeStyle = "rgba(255,255,255,0.032)";
+      tctx.lineWidth = 1;
+      for (let c = 0; c <= ARENA_SIZE / tileSize; c++) {
+        tctx.beginPath();
+        tctx.moveTo(c * tileSize, 0);
+        tctx.lineTo(c * tileSize, ARENA_SIZE);
+        tctx.stroke();
+      }
+      for (let r = 0; r <= ARENA_SIZE / tileSize; r++) {
+        tctx.beginPath();
+        tctx.moveTo(0, r * tileSize);
+        tctx.lineTo(ARENA_SIZE, r * tileSize);
+        tctx.stroke();
+      }
+
+      // Roads
+      tctx.lineCap = "round";
+      for (const road of layout.roads) {
+        tctx.strokeStyle = "#1B1F2A";
+        tctx.lineWidth = road.width;
+        tctx.beginPath();
+        tctx.moveTo(road.x1, road.y1);
+        tctx.lineTo(road.x2, road.y2);
+        tctx.stroke();
+
+        tctx.strokeStyle = "rgba(226, 232, 240, 0.08)";
+        tctx.lineWidth = 2;
+        tctx.setLineDash([16, 18]);
+        tctx.beginPath();
+        tctx.moveTo(road.x1, road.y1);
+        tctx.lineTo(road.x2, road.y2);
+        tctx.stroke();
+        tctx.setLineDash([]);
+      }
+
+      // Data Canal River Base
+      tctx.lineCap = "round";
+      tctx.lineJoin = "round";
+      tctx.strokeStyle = "#1E293B";
+      tctx.lineWidth = 104;
+      tctx.beginPath();
+      layout.riverPoints.forEach((pt, idx) => {
+        if (idx === 0) tctx.moveTo(pt.x, pt.y);
+        else tctx.lineTo(pt.x, pt.y);
+      });
+      tctx.stroke();
+      tctx.strokeStyle = "#082F49";
+      tctx.lineWidth = 86;
+      tctx.stroke();
+
+      // Bridges
+      for (const br of layout.bridges) {
+        tctx.fillStyle = "#4A3222";
+        tctx.strokeStyle = "#92623D";
+        tctx.lineWidth = 3;
+        tctx.fillRect(br.x, br.y, br.w, br.h);
+        tctx.strokeRect(br.x, br.y, br.w, br.h);
+        tctx.strokeStyle = "rgba(0, 0, 0, 0.35)";
+        tctx.lineWidth = 2;
+        for (let sy = br.y + 14; sy < br.y + br.h - 6; sy += 16) {
+          tctx.beginPath();
+          tctx.moveTo(br.x + 6, sy);
+          tctx.lineTo(br.x + br.w - 6, sy);
+          tctx.stroke();
+        }
+      }
+
+      // POI Floor Signs
+      tctx.font = "bold 22px Plus Jakarta Sans, sans-serif";
+      tctx.textAlign = "center";
+      for (const poi of ARENA_POIS) {
+        tctx.fillStyle = "rgba(255,255,255,0.065)";
+        tctx.fillText(poi.name.toUpperCase(), poi.dropX, poi.dropY - 125);
+      }
+
+      // Arena Border
+      tctx.strokeStyle = "#8B5CF6";
+      tctx.lineWidth = 5;
+      tctx.strokeRect(12, 12, ARENA_SIZE - 24, ARENA_SIZE - 24);
+
+      // Static Obstacles
+      for (const obs of layout.obstacles) {
+        tctx.fillStyle = "rgba(0,0,0,0.45)";
+        tctx.fillRect(obs.x + 6, obs.y + 6, obs.w, obs.h);
+
+        if (obs.kind === "wall") {
+          tctx.fillStyle = "#242938";
+          tctx.strokeStyle = "#475569";
+          tctx.lineWidth = 2;
+        } else if (obs.kind === "bookshelf") {
+          tctx.fillStyle = "#241914";
+          tctx.strokeStyle = "#78553A";
+          tctx.lineWidth = 2;
+        } else if (obs.kind === "server") {
+          tctx.fillStyle = "#0F172A";
+          tctx.strokeStyle = "#8B5CF6";
+          tctx.lineWidth = 2;
+        } else if (obs.kind === "bleacher") {
+          tctx.fillStyle = "#1E293B";
+          tctx.strokeStyle = "#38BDF8";
+          tctx.lineWidth = 2;
+        } else if (obs.kind === "desk") {
+          tctx.fillStyle = "#151D2E";
+          tctx.strokeStyle = "#334155";
+          tctx.lineWidth = 2;
+        } else {
+          tctx.fillStyle = "#1E2235";
+          tctx.strokeStyle = "#64748B";
+          tctx.lineWidth = 2.5;
+        }
+        tctx.fillRect(obs.x, obs.y, obs.w, obs.h);
+        tctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
+        if (obs.kind === "server") {
+          tctx.fillStyle = "#10B981";
+          tctx.fillRect(obs.x + 8, obs.y + 10, 8, 5);
+          tctx.fillStyle = "#38BDF8";
+          tctx.fillRect(obs.x + 8, obs.y + obs.h - 15, 8, 5);
+        }
+      }
+    }
+    terrainCacheRef.current = terrain;
+
+    const mmSize = 154;
+    const mm = document.createElement("canvas");
+    mm.width = mmSize;
+    mm.height = mmSize;
+    const mctx = mm.getContext("2d");
+    if (mctx) {
+      const scale = mmSize / ARENA_SIZE;
+      mctx.fillStyle = "#080A10";
+      mctx.fillRect(0, 0, mmSize, mmSize);
+      for (const b of layout.biomes) {
+        if (b.kind === "rotunda") continue;
+        mctx.fillStyle = b.floorColor;
+        mctx.fillRect(b.x * scale, b.y * scale, b.w * scale, b.h * scale);
+      }
+      mctx.strokeStyle = "#0369A1";
+      mctx.lineWidth = Math.max(4, 86 * scale);
+      mctx.lineCap = "round";
+      mctx.beginPath();
+      layout.riverPoints.forEach((pt, i) => {
+        if (i === 0) mctx.moveTo(pt.x * scale, pt.y * scale);
+        else mctx.lineTo(pt.x * scale, pt.y * scale);
+      });
+      mctx.stroke();
+      mctx.fillStyle = "#92623D";
+      for (const br of layout.bridges) {
+        mctx.fillRect(
+          br.x * scale,
+          br.y * scale,
+          Math.max(4, br.w * scale),
+          Math.max(4, br.h * scale)
+        );
+      }
+    }
+    minimapCacheRef.current = mm;
+  }, [layout]);
+
+  const flushPendingWorldPatches = useCallback(
+    (forceNow = false) => {
+      if (isHost) return;
+      const q = pendingPatchRef.current;
+      const hasAny =
+        q.botDamages.size > 0 ||
+        q.miniBozzDamages.size > 0 ||
+        q.crateStates.size > 0 ||
+        q.firewalls.length > 0 ||
+        q.killFeedEntries.length > 0;
+      if (!hasAny || patchFlushInFlightRef.current) return;
+
+      const now = Date.now();
+      if (!forceNow && now - lastPatchFlushMsRef.current < 200) return;
+
+      const botDamages = Array.from<{
+        id: string;
+        hp: number;
+        shield: number;
+        alive: boolean;
+        placement?: number;
+      }>(q.botDamages.values());
+      const miniBozzDamages = Array.from<{
+        id: string;
+        hp: number;
+        shield: number;
+        alive: boolean;
+      }>(q.miniBozzDamages.values());
+      const crateStates = Array.from<SyncedCrateState>(q.crateStates.values());
+      const firewallsToAdd = q.firewalls.splice(0, q.firewalls.length);
+      const killFeedEntries = q.killFeedEntries.splice(0, q.killFeedEntries.length);
+      q.botDamages.clear();
+      q.miniBozzDamages.clear();
+      q.crateStates.clear();
+
+      patchFlushInFlightRef.current = true;
+      lastPatchFlushMsRef.current = now;
+
+      void publishWorldPatch({
+        db,
+        roomCode: roomRef.current.roomCode,
+        botDamages,
+        miniBozzDamages,
+        crateStates,
+        firewallsToAdd,
+        killFeedEntries,
+      }).finally(() => {
+        patchFlushInFlightRef.current = false;
+      });
+    },
+    [db, isHost]
+  );
+
+  const queueWorldPatch = useCallback(
+    (
+      patch: {
+        addFirewall?: FirewallWall;
+        crateState?: SyncedCrateState;
+        miniBozzDamage?: { id: string; hp: number; shield: number; alive: boolean };
+        botDamage?: {
+          id: string;
+          hp: number;
+          shield: number;
+          alive: boolean;
+          placement?: number;
+        };
+        killFeedEntry?: string;
+      },
+      immediate = false
+    ) => {
+      const q = pendingPatchRef.current;
+      if (patch.addFirewall) {
+        q.firewalls.push(patch.addFirewall);
+      }
+      if (patch.crateState) {
+        q.crateStates.set(patch.crateState.crateId, patch.crateState);
+      }
+      if (patch.miniBozzDamage) {
+        q.miniBozzDamages.set(patch.miniBozzDamage.id, patch.miniBozzDamage);
+      }
+      if (patch.botDamage) {
+        q.botDamages.set(patch.botDamage.id, patch.botDamage);
+      }
+      if (patch.killFeedEntry) {
+        q.killFeedEntries.push(patch.killFeedEntry);
+      }
+      if (immediate) {
+        flushPendingWorldPatches(true);
+      }
+    },
+    [flushPendingWorldPatches]
+  );
+
+  const applyPlayersSnapshot = useCallback(
+    (nextPlayers: StudyPlayerDocument[]) => {
+      remotePlayersRef.current = nextPlayers;
+      const now = Date.now();
+      if (seenShotIdsRef.current.size > 500) {
+        seenShotIdsRef.current.clear();
+      }
+      for (const p of nextPlayers) {
+        if (p.playerId === currentPlayerId) continue;
+
+        upsertSmoothEntity(
+          remoteSmoothRef.current,
+          p.playerId,
+          p.x,
+          p.y,
+          p.aimAngle,
+          now
+        );
+
+        const prevAlive = prevRemoteAliveRef.current.get(p.playerId);
+        if (prevAlive === true && !p.alive) {
+          const hitAt = lastHitRemoteAtRef.current.get(p.playerId) || 0;
+          if (
+            now - hitAt < 3500 &&
+            !creditedHumanKillsRef.current.has(p.playerId)
+          ) {
+            creditedHumanKillsRef.current.add(p.playerId);
+            const local = localRef.current;
+            local.kills += 1;
+            local.shield = Math.min(100, local.shield + 20);
+            local.hp = Math.min(100, local.hp + 10);
+            local.tokens = Math.min(12, local.tokens + 1);
+            playBattleSfx("elim", mutedRef.current);
+            labelsRef.current.push({
+              x: local.x,
+              y: local.y - 22,
+              text: `ELIMINATED ${p.displayName}! +20 SHD`,
+              color: "#10B981",
+              life: 1.1,
+              maxLife: 1.1,
+            });
+          }
+        }
+        prevRemoteAliveRef.current.set(p.playerId, p.alive);
+
+        const prevShot = lastEntityShotIdRef.current.get(p.playerId);
+        if (p.lastShotId && p.lastShotId !== prevShot) {
+          lastEntityShotIdRef.current.set(p.playerId, p.lastShotId);
+          const isFreshInitial =
+            prevShot !== undefined || Math.abs(now - p.lastShotAtMs) < 2500;
+          if (isFreshInitial && !seenShotIdsRef.current.has(p.lastShotId)) {
+            seenShotIdsRef.current.add(p.lastShotId);
+            const decoded = decodeShotId(p.lastShotId);
+            const weaponCfg = WEAPON_META[decoded.archetype];
+            const estLagSec = Math.max(0, Math.min(0.14, (now - p.lastShotAtMs) / 1000));
+            const lifeTrim = Math.max(0, Math.min(220, now - p.lastShotAtMs));
+            const maxLife = Math.max(350, (weaponCfg.maxLifeMs || 1100) - lifeTrim);
+
+            if (decoded.archetype === "scatter") {
+              const baseAng = Math.atan2(p.lastShotVy, p.lastShotVx);
+              const spd = Math.hypot(p.lastShotVx, p.lastShotVy) || weaponCfg.speed;
+              for (let i = 0; i < weaponCfg.pellets; i++) {
+                const offset =
+                  ((i / Math.max(1, weaponCfg.pellets - 1)) - 0.5) * weaponCfg.spreadRad;
+                const vx = Math.cos(baseAng + offset) * spd;
+                const vy = Math.sin(baseAng + offset) * spd;
+                projectilesRef.current.push({
+                  id: `${p.lastShotId}_p${i}`,
+                  ownerId: p.playerId,
+                  ownerName: p.displayName,
+                  isBot: false,
+                  x: p.lastShotX + vx * estLagSec,
+                  y: p.lastShotY + vy * estLagSec,
+                  vx,
+                  vy,
+                  damage: decoded.damage,
+                  archetype: "scatter",
+                  rarity: decoded.rarity,
+                  splashRadius: 0,
+                  maxLifeMs: maxLife,
+                  createdAtMs: now,
+                });
+              }
+            } else {
               projectilesRef.current.push({
-                id: `${p.lastShotId}_p${i}`,
+                id: p.lastShotId,
                 ownerId: p.playerId,
                 ownerName: p.displayName,
                 isBot: false,
-                x: p.lastShotX + vx * estLagSec,
-                y: p.lastShotY + vy * estLagSec,
-                vx,
-                vy,
+                x: p.lastShotX + p.lastShotVx * estLagSec,
+                y: p.lastShotY + p.lastShotVy * estLagSec,
+                vx: p.lastShotVx,
+                vy: p.lastShotVy,
                 damage: decoded.damage,
-                archetype: "scatter",
+                archetype: decoded.archetype,
                 rarity: decoded.rarity,
-                splashRadius: 0,
+                splashRadius: weaponCfg.splashRadius,
                 maxLifeMs: maxLife,
                 createdAtMs: now,
               });
             }
-          } else {
-            projectilesRef.current.push({
-              id: p.lastShotId,
-              ownerId: p.playerId,
-              ownerName: p.displayName,
-              isBot: false,
-              x: p.lastShotX + p.lastShotVx * estLagSec,
-              y: p.lastShotY + p.lastShotVy * estLagSec,
-              vx: p.lastShotVx,
-              vy: p.lastShotVy,
-              damage: decoded.damage,
-              archetype: decoded.archetype,
-              rarity: decoded.rarity,
-              splashRadius: weaponCfg.splashRadius,
-              maxLifeMs: maxLife,
-              createdAtMs: now,
-            });
           }
         }
       }
-    }
-  }, [players, currentPlayerId]);
+    },
+    [currentPlayerId]
+  );
 
-  useEffect(() => {
-    if (!worldState) return;
-    const now = Date.now();
+  const applyWorldSnapshot = useCallback(
+    (nextWorld: StudyWorldStateDocument | null) => {
+      if (!nextWorld) return;
+      const now = Date.now();
 
-    if (!isHost) {
-      const incomingBots = worldState.bots || [];
-      botsRef.current = incomingBots.map((inc) => {
-        if (!botSmoothRef.current.has(inc.id)) {
-          botSmoothRef.current.set(inc.id, {
-            x: inc.x,
-            y: inc.y,
-            aimAngle: inc.aimAngle,
-          });
-        }
-        const hitAt = recentBotHitAtRef.current.get(inc.id) || 0;
-        const cur = botsRef.current.find((b) => b.id === inc.id);
-        if (cur && now - hitAt < 1800) {
-          const curEhp = cur.hp + cur.shield;
-          const incEhp = inc.hp + inc.shield;
-          if (curEhp < incEhp || (!cur.alive && inc.alive)) {
-            return {
-              ...inc,
-              hp: cur.hp,
-              shield: cur.shield,
-              alive: cur.alive && inc.alive,
-            };
-          }
-        }
-        return inc;
-      });
-
-      if (worldState.miniBozzes && worldState.miniBozzes.length > 0) {
-        miniBozzesRef.current = worldState.miniBozzes.map((inc) => {
-          if (!bossSmoothRef.current.has(inc.id)) {
-            bossSmoothRef.current.set(inc.id, {
-              x: inc.x,
-              y: inc.y,
-              aimAngle: inc.aimAngle,
-            });
-          }
-          const hitAt = recentBossHitAtRef.current.get(inc.id) || 0;
-          const cur = miniBozzesRef.current.find((m) => m.id === inc.id);
+      if (!isHost) {
+        const incomingBots = nextWorld.bots || [];
+        botsRef.current = incomingBots.map((inc) => {
+          upsertSmoothEntity(
+            botSmoothRef.current,
+            inc.id,
+            inc.x,
+            inc.y,
+            inc.aimAngle,
+            now
+          );
+          const hitAt = recentBotHitAtRef.current.get(inc.id) || 0;
+          const cur = botsRef.current.find((b) => b.id === inc.id);
           if (cur && now - hitAt < 1800) {
             const curEhp = cur.hp + cur.shield;
             const incEhp = inc.hp + inc.shield;
@@ -685,147 +1103,200 @@ export default function BattleRoyaleCanvas({
           }
           return inc;
         });
-      }
 
-      const incomingWalls = (worldState.firewalls || []).filter(
-        (fw) => fw.hp > 0 && fw.expiresAtMs > now
-      );
-      const keptLocal = firewallsRef.current.filter((fw) => {
-        const graceUntil = recentlyPlacedWallIdsRef.current.get(fw.id) || 0;
-        return (
-          fw.hp > 0 &&
-          fw.expiresAtMs > now &&
-          graceUntil > now &&
-          !incomingWalls.some((inc) => inc.id === fw.id)
+        if (nextWorld.miniBozzes && nextWorld.miniBozzes.length > 0) {
+          miniBozzesRef.current = nextWorld.miniBozzes.map((inc) => {
+            upsertSmoothEntity(
+              bossSmoothRef.current,
+              inc.id,
+              inc.x,
+              inc.y,
+              inc.aimAngle,
+              now
+            );
+            const hitAt = recentBossHitAtRef.current.get(inc.id) || 0;
+            const cur = miniBozzesRef.current.find((m) => m.id === inc.id);
+            if (cur && now - hitAt < 1800) {
+              const curEhp = cur.hp + cur.shield;
+              const incEhp = inc.hp + inc.shield;
+              if (curEhp < incEhp || (!cur.alive && inc.alive)) {
+                return {
+                  ...inc,
+                  hp: cur.hp,
+                  shield: cur.shield,
+                  alive: cur.alive && inc.alive,
+                };
+              }
+            }
+            return inc;
+          });
+        }
+
+        const incomingWalls = (nextWorld.firewalls || []).filter(
+          (fw) => fw.hp > 0 && fw.expiresAtMs > now
         );
-      });
-      firewallsRef.current = [...incomingWalls, ...keptLocal];
-    } else {
-      if (botsRef.current.length === 0 && (worldState.bots?.length || 0) > 0) {
-        botsRef.current = worldState.bots;
-      } else if (worldState.bots && worldState.bots.length > 0) {
-        for (const inc of worldState.bots) {
-          const cur = botsRef.current.find((b) => b.id === inc.id);
-          if (cur) {
-            const curEhp = cur.hp + cur.shield;
-            const incEhp = inc.hp + inc.shield;
-            if (incEhp < curEhp) {
-              cur.hp = inc.hp;
-              cur.shield = inc.shield;
-            }
-            if (!inc.alive && cur.alive) {
-              cur.alive = false;
-              cur.hp = 0;
-              cur.shield = 0;
-              cur.placement = inc.placement || cur.placement;
+        const keptLocal = firewallsRef.current.filter((fw) => {
+          const graceUntil = recentlyPlacedWallIdsRef.current.get(fw.id) || 0;
+          return (
+            fw.hp > 0 &&
+            fw.expiresAtMs > now &&
+            graceUntil > now &&
+            !incomingWalls.some((inc) => inc.id === fw.id)
+          );
+        });
+        firewallsRef.current = [...incomingWalls, ...keptLocal];
+      } else {
+        if (botsRef.current.length === 0 && (nextWorld.bots?.length || 0) > 0) {
+          botsRef.current = nextWorld.bots;
+        } else if (nextWorld.bots && nextWorld.bots.length > 0) {
+          for (const inc of nextWorld.bots) {
+            const cur = botsRef.current.find((b) => b.id === inc.id);
+            if (cur) {
+              const curEhp = cur.hp + cur.shield;
+              const incEhp = inc.hp + inc.shield;
+              if (incEhp < curEhp) {
+                cur.hp = inc.hp;
+                cur.shield = inc.shield;
+              }
+              if (!inc.alive && cur.alive) {
+                cur.alive = false;
+                cur.hp = 0;
+                cur.shield = 0;
+                cur.placement = inc.placement || cur.placement;
+              }
             }
           }
         }
-      }
 
-      if (
-        miniBozzesRef.current.length === 0 &&
-        (worldState.miniBozzes?.length || 0) > 0
-      ) {
-        miniBozzesRef.current = worldState.miniBozzes;
-      } else if (worldState.miniBozzes && worldState.miniBozzes.length > 0) {
-        for (const inc of worldState.miniBozzes) {
-          const cur = miniBozzesRef.current.find((m) => m.id === inc.id);
-          if (cur) {
-            const curEhp = cur.hp + cur.shield;
-            const incEhp = inc.hp + inc.shield;
-            if (incEhp < curEhp) {
-              cur.hp = inc.hp;
-              cur.shield = inc.shield;
-            }
-            if (!inc.alive && cur.alive) {
-              cur.alive = false;
-              cur.hp = 0;
-              cur.shield = 0;
-            }
-          }
-        }
-      }
-      for (const fw of worldState.firewalls || []) {
         if (
-          fw.hp > 0 &&
-          fw.expiresAtMs > now &&
-          !firewallsRef.current.some((cur) => cur.id === fw.id)
+          miniBozzesRef.current.length === 0 &&
+          (nextWorld.miniBozzes?.length || 0) > 0
         ) {
-          firewallsRef.current.push(fw);
+          miniBozzesRef.current = nextWorld.miniBozzes;
+        } else if (nextWorld.miniBozzes && nextWorld.miniBozzes.length > 0) {
+          for (const inc of nextWorld.miniBozzes) {
+            const cur = miniBozzesRef.current.find((m) => m.id === inc.id);
+            if (cur) {
+              const curEhp = cur.hp + cur.shield;
+              const incEhp = inc.hp + inc.shield;
+              if (incEhp < curEhp) {
+                cur.hp = inc.hp;
+                cur.shield = inc.shield;
+              }
+              if (!inc.alive && cur.alive) {
+                cur.alive = false;
+                cur.hp = 0;
+                cur.shield = 0;
+              }
+            }
+          }
         }
-      }
-    }
-
-    const map = crateStatesRef.current;
-    for (const cs of worldState.crateStates || []) {
-      const prev = map.get(cs.crateId);
-      map.set(cs.crateId, {
-        crateId: cs.crateId,
-        lockedUntilMs: Math.max(prev?.lockedUntilMs || 0, cs.lockedUntilMs),
-        depletedUntilMs: Math.max(prev?.depletedUntilMs || 0, cs.depletedUntilMs),
-      });
-    }
-
-    if (!isHost) {
-      killFeedRef.current = worldState.killFeed || [];
-      for (const b of worldState.bots || []) {
-        const prevShot = lastEntityShotIdRef.current.get(b.id);
-        if (b.lastShotId && b.lastShotId !== prevShot) {
-          lastEntityShotIdRef.current.set(b.id, b.lastShotId);
-          const isFresh = prevShot !== undefined || Math.abs(now - b.lastShotAtMs) < 2500;
-          if (isFresh && !seenShotIdsRef.current.has(b.lastShotId)) {
-            seenShotIdsRef.current.add(b.lastShotId);
-            const estLagSec = Math.max(0, Math.min(0.14, (now - b.lastShotAtMs) / 1000));
-            const lifeTrim = Math.max(0, Math.min(200, now - b.lastShotAtMs));
-            projectilesRef.current.push({
-              id: b.lastShotId,
-              ownerId: b.id,
-              ownerName: b.name,
-              isBot: true,
-              x: b.lastShotX + b.lastShotVx * estLagSec,
-              y: b.lastShotY + b.lastShotVy * estLagSec,
-              vx: b.lastShotVx,
-              vy: b.lastShotVy,
-              damage: 15,
-              archetype: b.weaponArchetype || "blaster",
-              rarity: b.weaponRarity || "Common",
-              maxLifeMs: Math.max(400, 1100 - lifeTrim),
-              createdAtMs: now,
-            });
+        for (const fw of nextWorld.firewalls || []) {
+          if (
+            fw.hp > 0 &&
+            fw.expiresAtMs > now &&
+            !firewallsRef.current.some((cur) => cur.id === fw.id)
+          ) {
+            firewallsRef.current.push(fw);
           }
         }
       }
-      for (const mb of worldState.miniBozzes || []) {
-        const prevShot = lastEntityShotIdRef.current.get(mb.id);
-        if (mb.lastShotId && mb.lastShotId !== prevShot) {
-          lastEntityShotIdRef.current.set(mb.id, mb.lastShotId);
-          const isFresh = prevShot !== undefined || Math.abs(now - mb.lastShotAtMs) < 2500;
-          if (isFresh && !seenShotIdsRef.current.has(mb.lastShotId)) {
-            seenShotIdsRef.current.add(mb.lastShotId);
-            const estLagSec = Math.max(0, Math.min(0.14, (now - mb.lastShotAtMs) / 1000));
-            const lifeTrim = Math.max(0, Math.min(200, now - mb.lastShotAtMs));
-            projectilesRef.current.push({
-              id: mb.lastShotId,
-              ownerId: mb.id,
-              ownerName: mb.name,
-              isBot: true,
-              isMiniBozz: true,
-              x: mb.lastShotX + mb.lastShotVx * estLagSec,
-              y: mb.lastShotY + mb.lastShotVy * estLagSec,
-              vx: mb.lastShotVx,
-              vy: mb.lastShotVy,
-              damage: 22,
-              archetype: "cannon",
-              rarity: "Mythic",
-              maxLifeMs: Math.max(400, 1100 - lifeTrim),
-              createdAtMs: now,
-            });
+
+      const map = crateStatesRef.current;
+      for (const cs of nextWorld.crateStates || []) {
+        const prev = map.get(cs.crateId);
+        map.set(cs.crateId, {
+          crateId: cs.crateId,
+          lockedUntilMs: Math.max(prev?.lockedUntilMs || 0, cs.lockedUntilMs),
+          depletedUntilMs: Math.max(prev?.depletedUntilMs || 0, cs.depletedUntilMs),
+        });
+      }
+
+      if (!isHost) {
+        killFeedRef.current = nextWorld.killFeed || [];
+        for (const b of nextWorld.bots || []) {
+          const prevShot = lastEntityShotIdRef.current.get(b.id);
+          if (b.lastShotId && b.lastShotId !== prevShot) {
+            lastEntityShotIdRef.current.set(b.id, b.lastShotId);
+            const isFresh =
+              prevShot !== undefined || Math.abs(now - b.lastShotAtMs) < 2500;
+            if (isFresh && !seenShotIdsRef.current.has(b.lastShotId)) {
+              seenShotIdsRef.current.add(b.lastShotId);
+              const estLagSec = Math.max(
+                0,
+                Math.min(0.14, (now - b.lastShotAtMs) / 1000)
+              );
+              const lifeTrim = Math.max(0, Math.min(200, now - b.lastShotAtMs));
+              projectilesRef.current.push({
+                id: b.lastShotId,
+                ownerId: b.id,
+                ownerName: b.name,
+                isBot: true,
+                x: b.lastShotX + b.lastShotVx * estLagSec,
+                y: b.lastShotY + b.lastShotVy * estLagSec,
+                vx: b.lastShotVx,
+                vy: b.lastShotVy,
+                damage: 15,
+                archetype: b.weaponArchetype || "blaster",
+                rarity: b.weaponRarity || "Common",
+                maxLifeMs: Math.max(400, 1100 - lifeTrim),
+                createdAtMs: now,
+              });
+            }
+          }
+        }
+        for (const mb of nextWorld.miniBozzes || []) {
+          const prevShot = lastEntityShotIdRef.current.get(mb.id);
+          if (mb.lastShotId && mb.lastShotId !== prevShot) {
+            lastEntityShotIdRef.current.set(mb.id, mb.lastShotId);
+            const isFresh =
+              prevShot !== undefined || Math.abs(now - mb.lastShotAtMs) < 2500;
+            if (isFresh && !seenShotIdsRef.current.has(mb.lastShotId)) {
+              seenShotIdsRef.current.add(mb.lastShotId);
+              const estLagSec = Math.max(
+                0,
+                Math.min(0.14, (now - mb.lastShotAtMs) / 1000)
+              );
+              const lifeTrim = Math.max(0, Math.min(200, now - mb.lastShotAtMs));
+              projectilesRef.current.push({
+                id: mb.lastShotId,
+                ownerId: mb.id,
+                ownerName: mb.name,
+                isBot: true,
+                isMiniBozz: true,
+                x: mb.lastShotX + mb.lastShotVx * estLagSec,
+                y: mb.lastShotY + mb.lastShotVy * estLagSec,
+                vx: mb.lastShotVx,
+                vy: mb.lastShotVy,
+                damage: 22,
+                archetype: "cannon",
+                rarity: "Mythic",
+                maxLifeMs: Math.max(400, 1100 - lifeTrim),
+                createdAtMs: now,
+              });
+            }
           }
         }
       }
-    }
-  }, [worldState, isHost]);
+    },
+    [isHost]
+  );
+
+  useEffect(() => {
+    applyPlayersSnapshot(players);
+  }, [players, applyPlayersSnapshot]);
+
+  useEffect(() => {
+    applyWorldSnapshot(worldState);
+  }, [worldState, applyWorldSnapshot]);
+
+  useEffect(() => {
+    if (!registerLiveStream) return;
+    return registerLiveStream({
+      onPlayers: applyPlayersSnapshot,
+      onWorld: applyWorldSnapshot,
+    });
+  }, [registerLiveStream, applyPlayersSnapshot, applyWorldSnapshot]);
 
   const spawnBurst = useCallback(
     (x: number, y: number, color: string, count = 8) => {
@@ -1103,17 +1574,13 @@ export default function BattleRoyaleCanvas({
     ].slice(-24);
 
     if (!isHost) {
-      void publishWorldPatch({
-        db,
-        roomCode: roomRef.current.roomCode,
-        addFirewall: wall,
-      });
+      queueWorldPatch({ addFirewall: wall }, true);
     }
 
     playBattleSfx("buildWall", mutedRef.current);
     spawnBurst(cx, cy, "#38BDF8", 12);
     spawnLabel(cx, cy, "FIREWALL DEPLOYED", "#38BDF8");
-  }, [currentPlayerId, db, isHost, showToast, spawnBurst, spawnLabel]);
+  }, [currentPlayerId, isHost, queueWorldPatch, showToast, spawnBurst, spawnLabel]);
 
   const handleDash = useCallback(() => {
     const local = localRef.current;
@@ -1208,19 +1675,20 @@ export default function BattleRoyaleCanvas({
             }
             if (!isHost) {
               recentBossHitAtRef.current.set(mb.id, now);
-              void publishWorldPatch({
-                db,
-                roomCode: roomRef.current.roomCode,
-                miniBozzDamage: {
-                  id: mb.id,
-                  hp: mb.hp,
-                  shield: mb.shield,
-                  alive: mb.alive,
+              queueWorldPatch(
+                {
+                  miniBozzDamage: {
+                    id: mb.id,
+                    hp: mb.hp,
+                    shield: mb.shield,
+                    alive: mb.alive,
+                  },
+                  killFeedEntry: defeated
+                    ? `${meFromRoom?.displayName || "Player"} defeated Mini-Bozz ${mb.name}!`
+                    : undefined,
                 },
-                killFeedEntry: defeated
-                  ? `${meFromRoom?.displayName || "Player"} defeated Mini-Bozz ${mb.name}!`
-                  : undefined,
-              });
+                true
+              );
             }
           }
 
@@ -1349,11 +1817,7 @@ export default function BattleRoyaleCanvas({
         };
         crateStatesRef.current.set(crate.id, unlockedState);
         if (!isHost) {
-          void publishWorldPatch({
-            db,
-            roomCode: roomRef.current.roomCode,
-            crateState: unlockedState,
-          });
+          queueWorldPatch({ crateState: unlockedState }, true);
         }
 
         const rarityColor = RARITY_META[rarity].color;
@@ -1386,11 +1850,7 @@ export default function BattleRoyaleCanvas({
         };
         crateStatesRef.current.set(crate.id, lockedState);
         if (!isHost) {
-          void publishWorldPatch({
-            db,
-            roomCode: roomRef.current.roomCode,
-            crateState: lockedState,
-          });
+          queueWorldPatch({ crateState: lockedState }, true);
         }
         local.hp = Math.max(0, local.hp - 10);
         local.exposedUntilMs = now + 6000;
@@ -1435,9 +1895,11 @@ export default function BattleRoyaleCanvas({
       activePrompt,
       promptFeedback,
       currentPlayerId,
+      isHost,
       meFromRoom?.displayName,
       handleMiniBozzDefeated,
       pushKillFeed,
+      queueWorldPatch,
       showToast,
       spawnBurst,
       spawnLabel,
@@ -1557,6 +2019,7 @@ export default function BattleRoyaleCanvas({
     let rafId = 0;
     let lastTime = performance.now();
     let lastHudUpdateMs = 0;
+    let lastMinimapDrawMs = 0;
     let lastPlayerSyncMs = 0;
     let lastWorldSyncMs = 0;
 
@@ -2288,70 +2751,11 @@ export default function BattleRoyaleCanvas({
         }
       }
 
-      // 2.5 Smooth 60 FPS Entity Interpolation for Remote Humans & (for Non-Host) Bots / Mini-Bozzes
-      const smoothFactor = Math.min(1, dt * 15);
-      for (const rp of remotePlayersRef.current) {
-        if (!rp.alive || rp.playerId === currentPlayerId) continue;
-        const sm = remoteSmoothRef.current.get(rp.playerId);
-        if (!sm) {
-          remoteSmoothRef.current.set(rp.playerId, {
-            x: rp.x,
-            y: rp.y,
-            aimAngle: rp.aimAngle,
-          });
-        } else {
-          if (Math.hypot(rp.x - sm.x, rp.y - sm.y) > 280) {
-            sm.x = rp.x;
-            sm.y = rp.y;
-          } else {
-            sm.x += (rp.x - sm.x) * smoothFactor;
-            sm.y += (rp.y - sm.y) * smoothFactor;
-          }
-          sm.aimAngle = lerpAngle(sm.aimAngle, rp.aimAngle, Math.min(1, dt * 18));
-        }
-      }
-
+      // 2.5 Velocity-Extrapolated 60 FPS Entity Smoothing for Remote Humans & (for Non-Host) Bots / Mini-Bozzes
+      stepSmoothMap(remoteSmoothRef.current, dt, now, 18);
       if (!isHost) {
-        for (const bot of botsRef.current) {
-          if (!bot.alive) continue;
-          const sm = botSmoothRef.current.get(bot.id);
-          if (!sm) {
-            botSmoothRef.current.set(bot.id, {
-              x: bot.x,
-              y: bot.y,
-              aimAngle: bot.aimAngle,
-            });
-          } else {
-            if (Math.hypot(bot.x - sm.x, bot.y - sm.y) > 280) {
-              sm.x = bot.x;
-              sm.y = bot.y;
-            } else {
-              sm.x += (bot.x - sm.x) * smoothFactor;
-              sm.y += (bot.y - sm.y) * smoothFactor;
-            }
-            sm.aimAngle = lerpAngle(sm.aimAngle, bot.aimAngle, Math.min(1, dt * 16));
-          }
-        }
-        for (const mb of miniBozzesRef.current) {
-          if (!mb.alive) continue;
-          const sm = bossSmoothRef.current.get(mb.id);
-          if (!sm) {
-            bossSmoothRef.current.set(mb.id, {
-              x: mb.x,
-              y: mb.y,
-              aimAngle: mb.aimAngle,
-            });
-          } else {
-            if (Math.hypot(mb.x - sm.x, mb.y - sm.y) > 280) {
-              sm.x = mb.x;
-              sm.y = mb.y;
-            } else {
-              sm.x += (mb.x - sm.x) * smoothFactor;
-              sm.y += (mb.y - sm.y) * smoothFactor;
-            }
-            sm.aimAngle = lerpAngle(sm.aimAngle, mb.aimAngle, Math.min(1, dt * 14));
-          }
-        }
+        stepSmoothMap(botSmoothRef.current, dt, now, 16);
+        stepSmoothMap(bossSmoothRef.current, dt, now, 14);
       }
 
       // 3. Projectile Simulation, Firewall Blocking, & Hits (Players / Bots / Mini-Bozzes)
@@ -2442,19 +2846,20 @@ export default function BattleRoyaleCanvas({
                 }
                 if (!isHost) {
                   recentBossHitAtRef.current.set(mb.id, now);
-                  void publishWorldPatch({
-                    db,
-                    roomCode: currentRoom.roomCode,
-                    miniBozzDamage: {
-                      id: mb.id,
-                      hp: mb.hp,
-                      shield: mb.shield,
-                      alive: mb.alive,
+                  queueWorldPatch(
+                    {
+                      miniBozzDamage: {
+                        id: mb.id,
+                        hp: mb.hp,
+                        shield: mb.shield,
+                        alive: mb.alive,
+                      },
+                      killFeedEntry: died
+                        ? `${proj.ownerName} defeated Mini-Bozz ${mb.name}!`
+                        : undefined,
                     },
-                    killFeedEntry: died
-                      ? `${proj.ownerName} defeated Mini-Bozz ${mb.name}!`
-                      : undefined,
-                  });
+                    died
+                  );
                 }
               }
               break;
@@ -2522,20 +2927,21 @@ export default function BattleRoyaleCanvas({
 
                 if (!isHost) {
                   recentBotHitAtRef.current.set(bot.id, now);
-                  void publishWorldPatch({
-                    db,
-                    roomCode: currentRoom.roomCode,
-                    botDamage: {
-                      id: bot.id,
-                      hp: bot.hp,
-                      shield: bot.shield,
-                      alive: bot.alive,
-                      placement: bot.placement,
+                  queueWorldPatch(
+                    {
+                      botDamage: {
+                        id: bot.id,
+                        hp: bot.hp,
+                        shield: bot.shield,
+                        alive: bot.alive,
+                        placement: bot.placement,
+                      },
+                      killFeedEntry: botDied
+                        ? `${proj.ownerName} eliminated ${bot.name}`
+                        : undefined,
                     },
-                    killFeedEntry: botDied
-                      ? `${proj.ownerName} eliminated ${bot.name}`
-                      : undefined,
-                  });
+                    botDied
+                  );
                 }
               }
               break;
@@ -2663,159 +3069,29 @@ export default function BattleRoyaleCanvas({
           ctx.save();
           ctx.translate(-camX, -camY);
 
-          // A. 5 POI Floors
-          for (const biome of layout.biomes) {
-            if (biome.kind === "rotunda") continue;
-            if (
-              biome.x + biome.w < camX ||
-              biome.x > camX + cw ||
-              biome.y + biome.h < camY ||
-              biome.y > camY + ch
-            ) {
-              continue;
-            }
-            ctx.fillStyle = biome.floorColor;
-            ctx.fillRect(biome.x, biome.y, biome.w, biome.h);
-
-            if (biome.kind === "library") {
-              ctx.strokeStyle = "rgba(167, 139, 250, 0.06)";
-              ctx.lineWidth = 1;
-              const startY = Math.max(biome.y, Math.floor(camY / 44) * 44);
-              const endY = Math.min(biome.y + biome.h, camY + ch);
-              for (let py = startY; py <= endY; py += 44) {
-                ctx.beginPath();
-                ctx.moveTo(Math.max(biome.x, camX), py);
-                ctx.lineTo(Math.min(biome.x + biome.w, camX + cw), py);
-                ctx.stroke();
-              }
-            } else if (biome.kind === "stadium") {
-              // Data Docks Pier Decking
-              ctx.strokeStyle = "rgba(56, 189, 248, 0.14)";
-              ctx.lineWidth = 22;
-              ctx.beginPath();
-              ctx.ellipse(520, 1840, 310, 210, 0, 0, Math.PI * 2);
-              ctx.stroke();
-            } else if (biome.kind === "lab") {
-              ctx.strokeStyle = "rgba(251, 191, 36, 0.065)";
-              ctx.lineWidth = 1;
-              const startX = Math.max(biome.x, Math.floor(camX / 64) * 64);
-              const endX = Math.min(biome.x + biome.w, camX + cw);
-              for (let px = startX; px <= endX; px += 64) {
-                ctx.beginPath();
-                ctx.moveTo(px, Math.max(biome.y, camY));
-                ctx.lineTo(px, Math.min(biome.y + biome.h, camY + ch));
-                ctx.stroke();
-              }
-            }
+          // A. Single-Blit Cached Static Terrain, Roads, River Channel, Bridges, Watermarks & Obstacles
+          const sx = Math.max(0, Math.floor(camX));
+          const sy = Math.max(0, Math.floor(camY));
+          const sw = Math.min(ARENA_SIZE - sx, Math.ceil(cw + 2));
+          const sh = Math.min(ARENA_SIZE - sy, Math.ceil(ch + 2));
+          if (terrainCacheRef.current && sw > 0 && sh > 0) {
+            ctx.drawImage(terrainCacheRef.current, sx, sy, sw, sh, sx, sy, sw, sh);
           }
 
-          // Bozz Citadel Center Plaza
-          const center = ARENA_SIZE / 2;
-          ctx.fillStyle = "#160F24";
-          ctx.beginPath();
-          ctx.arc(center, center, 315, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.strokeStyle = "rgba(244, 63, 94, 0.28)";
-          ctx.lineWidth = 3;
-          ctx.stroke();
-
-          ctx.strokeStyle = "rgba(167, 139, 250, 0.16)";
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.arc(center, center, 175, 0, Math.PI * 2);
-          ctx.stroke();
-
-          // Tactical Grid
-          const tileSize = 100;
-          const startCol = Math.max(0, Math.floor(camX / tileSize));
-          const endCol = Math.min(ARENA_SIZE / tileSize, Math.ceil((camX + cw) / tileSize));
-          const startRow = Math.max(0, Math.floor(camY / tileSize));
-          const endRow = Math.min(ARENA_SIZE / tileSize, Math.ceil((camY + ch) / tileSize));
-          ctx.strokeStyle = "rgba(255,255,255,0.032)";
-          ctx.lineWidth = 1;
-          for (let c = startCol; c <= endCol; c++) {
-            ctx.beginPath();
-            ctx.moveTo(c * tileSize, startRow * tileSize);
-            ctx.lineTo(c * tileSize, endRow * tileSize);
-            ctx.stroke();
-          }
-          for (let r = startRow; r <= endRow; r++) {
-            ctx.beginPath();
-            ctx.moveTo(startCol * tileSize, r * tileSize);
-            ctx.lineTo(endCol * tileSize, r * tileSize);
-            ctx.stroke();
-          }
-
-          // B. Roads
-          ctx.lineCap = "round";
-          for (const road of layout.roads) {
-            ctx.strokeStyle = "#1B1F2A";
-            ctx.lineWidth = road.width;
-            ctx.beginPath();
-            ctx.moveTo(road.x1, road.y1);
-            ctx.lineTo(road.x2, road.y2);
-            ctx.stroke();
-
-            ctx.strokeStyle = "rgba(226, 232, 240, 0.08)";
-            ctx.lineWidth = 2;
-            ctx.setLineDash([16, 18]);
-            ctx.beginPath();
-            ctx.moveTo(road.x1, road.y1);
-            ctx.lineTo(road.x2, road.y2);
-            ctx.stroke();
-            ctx.setLineDash([]);
-          }
-
-          // C. Data Canal River
+          // Lightweight Animated Data Canal Flow Accent
           ctx.lineCap = "round";
           ctx.lineJoin = "round";
-          ctx.strokeStyle = "#1E293B";
-          ctx.lineWidth = 104;
+          ctx.strokeStyle = "rgba(56, 189, 248, 0.25)";
+          ctx.lineWidth = 14;
+          ctx.setLineDash([28, 34]);
+          ctx.lineDashOffset = -(now * 0.04) % 62;
           ctx.beginPath();
           layout.riverPoints.forEach((pt, idx) => {
             if (idx === 0) ctx.moveTo(pt.x, pt.y);
             else ctx.lineTo(pt.x, pt.y);
           });
           ctx.stroke();
-          ctx.strokeStyle = "#082F49";
-          ctx.lineWidth = 86;
-          ctx.stroke();
-          ctx.strokeStyle = "rgba(56, 189, 248, 0.25)";
-          ctx.lineWidth = 14;
-          ctx.setLineDash([28, 34]);
-          ctx.lineDashOffset = -(now * 0.04) % 62;
-          ctx.stroke();
           ctx.setLineDash([]);
-
-          // D. Piers & Bridges
-          for (const br of layout.bridges) {
-            ctx.fillStyle = "#4A3222";
-            ctx.strokeStyle = "#92623D";
-            ctx.lineWidth = 3;
-            ctx.fillRect(br.x, br.y, br.w, br.h);
-            ctx.strokeRect(br.x, br.y, br.w, br.h);
-            ctx.strokeStyle = "rgba(0, 0, 0, 0.35)";
-            ctx.lineWidth = 2;
-            for (let sy = br.y + 14; sy < br.y + br.h - 6; sy += 16) {
-              ctx.beginPath();
-              ctx.moveTo(br.x + 6, sy);
-              ctx.lineTo(br.x + br.w - 6, sy);
-              ctx.stroke();
-            }
-          }
-
-          // Watermark POI Floor Signs
-          ctx.font = "bold 22px Plus Jakarta Sans, sans-serif";
-          ctx.textAlign = "center";
-          for (const poi of ARENA_POIS) {
-            ctx.fillStyle = "rgba(255,255,255,0.065)";
-            ctx.fillText(poi.name.toUpperCase(), poi.dropX, poi.dropY - 125);
-          }
-
-          // Arena Border
-          ctx.strokeStyle = "#8B5CF6";
-          ctx.lineWidth = 5;
-          ctx.strokeRect(12, 12, ARENA_SIZE - 24, ARENA_SIZE - 24);
 
           // Jump Pads & Shrines
           const pulse = 0.5 + 0.5 * Math.sin(now * 0.007);
@@ -2942,62 +3218,7 @@ export default function BattleRoyaleCanvas({
               );
             }
           }
-
-          // Static Obstacles
-          for (const obs of layout.obstacles) {
-            if (
-              obs.x + obs.w < camX ||
-              obs.x > camX + cw ||
-              obs.y + obs.h < camY ||
-              obs.y > camY + ch
-            ) {
-              continue;
-            }
-            ctx.fillStyle = "rgba(0,0,0,0.45)";
-            ctx.fillRect(obs.x + 6, obs.y + 6, obs.w, obs.h);
-
-            if (obs.kind === "wall") {
-              ctx.fillStyle = "#242938";
-              ctx.strokeStyle = "#475569";
-              ctx.lineWidth = 2;
-              ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
-              ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
-            } else if (obs.kind === "bookshelf") {
-              ctx.fillStyle = "#241914";
-              ctx.strokeStyle = "#78553A";
-              ctx.lineWidth = 2;
-              ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
-              ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
-            } else if (obs.kind === "server") {
-              ctx.fillStyle = "#0F172A";
-              ctx.strokeStyle = "#8B5CF6";
-              ctx.lineWidth = 2;
-              ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
-              ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
-              const ledColor = Math.floor(now / 350) % 2 === 0 ? "#10B981" : "#38BDF8";
-              ctx.fillStyle = ledColor;
-              ctx.fillRect(obs.x + 8, obs.y + 10, 8, 5);
-              ctx.fillRect(obs.x + 8, obs.y + obs.h - 15, 8, 5);
-            } else if (obs.kind === "bleacher") {
-              ctx.fillStyle = "#1E293B";
-              ctx.strokeStyle = "#38BDF8";
-              ctx.lineWidth = 2;
-              ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
-              ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
-            } else if (obs.kind === "desk") {
-              ctx.fillStyle = "#151D2E";
-              ctx.strokeStyle = "#334155";
-              ctx.lineWidth = 2;
-              ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
-              ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
-            } else {
-              ctx.fillStyle = "#1E2235";
-              ctx.strokeStyle = "#64748B";
-              ctx.lineWidth = 2.5;
-              ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
-              ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
-            }
-          }
+          // Static obstacles are pre-rendered in terrainCacheRef for max FPS!
 
           // Deployed Temporary Firewall Cover Walls
           for (const fw of firewallsRef.current) {
@@ -3446,45 +3667,29 @@ export default function BattleRoyaleCanvas({
         }
       }
 
-      // 6. Render Minimap & Full Map (including System Glitch Storm + Gold Medallion Radius!)
-      const drawMapCanvas = (targetCanvas: HTMLCanvasElement | null, showLabels: boolean) => {
-        if (!targetCanvas) return;
-        const mctx = targetCanvas.getContext("2d");
-        if (!mctx) return;
-        const mw = targetCanvas.width;
-        const scale = mw / ARENA_SIZE;
+      // 6. Throttled Minimap & Full Map Render (~12Hz) with Cached Static Terrain
+      if (now - lastMinimapDrawMs >= 85) {
+        lastMinimapDrawMs = now;
+        const drawMapCanvas = (targetCanvas: HTMLCanvasElement | null, showLabels: boolean) => {
+          if (!targetCanvas) return;
+          const mctx = targetCanvas.getContext("2d");
+          if (!mctx) return;
+          const mw = targetCanvas.width;
+          const scale = mw / ARENA_SIZE;
 
-        mctx.fillStyle = "#080A10";
-        mctx.fillRect(0, 0, mw, mw);
+          if (minimapCacheRef.current) {
+            mctx.drawImage(minimapCacheRef.current, 0, 0, mw, mw);
+          } else {
+            mctx.fillStyle = "#080A10";
+            mctx.fillRect(0, 0, mw, mw);
+          }
 
-        for (const b of layout.biomes) {
-          if (b.kind === "rotunda") continue;
-          mctx.fillStyle = b.floorColor;
-          mctx.fillRect(b.x * scale, b.y * scale, b.w * scale, b.h * scale);
-        }
-
-        // Data Canal & Bridges
-        mctx.strokeStyle = "#0369A1";
-        mctx.lineWidth = Math.max(4, 86 * scale);
-        mctx.lineCap = "round";
-        mctx.beginPath();
-        layout.riverPoints.forEach((pt, i) => {
-          if (i === 0) mctx.moveTo(pt.x * scale, pt.y * scale);
-          else mctx.lineTo(pt.x * scale, pt.y * scale);
-        });
-        mctx.stroke();
-
-        mctx.fillStyle = "#92623D";
-        for (const br of layout.bridges) {
-          mctx.fillRect(br.x * scale, br.y * scale, Math.max(4, br.w * scale), Math.max(4, br.h * scale));
-        }
-
-        // System Glitch Storm Overlay
-        mctx.fillStyle = "rgba(239, 68, 68, 0.32)";
-        mctx.beginPath();
-        mctx.rect(0, 0, mw, mw);
-        mctx.arc(zone.cx * scale, zone.cy * scale, zone.currentRadius * scale, 0, Math.PI * 2, true);
-        mctx.fill();
+          // System Glitch Storm Overlay
+          mctx.fillStyle = "rgba(239, 68, 68, 0.32)";
+          mctx.beginPath();
+          mctx.rect(0, 0, mw, mw);
+          mctx.arc(zone.cx * scale, zone.cy * scale, zone.currentRadius * scale, 0, Math.PI * 2, true);
+          mctx.fill();
 
         mctx.strokeStyle = "#10B981";
         mctx.lineWidth = showLabels ? 2.5 : 1.5;
@@ -3611,9 +3816,10 @@ export default function BattleRoyaleCanvas({
       if (showFullMapRef.current) {
         drawMapCanvas(fullMapRef.current, true);
       }
+      }
 
-      // 7. Throttled React HUD Snapshot (~10Hz)
-      if (now - lastHudUpdateMs >= 100) {
+      // 7. Throttled React HUD Snapshot (~7.5Hz)
+      if (now - lastHudUpdateMs >= 130) {
         lastHudUpdateMs = now;
         const aliveHumans = remotePlayersRef.current.filter((p) =>
           p.playerId === currentPlayerId ? local.alive : p.alive
@@ -3733,11 +3939,23 @@ export default function BattleRoyaleCanvas({
         }
       }
 
-      // 8. Serialized High-Frequency Firestore Sync for Human Player (~100ms + instant on shot/hit/death) & Host World (~240ms)
+      // 8. Serialized High-Frequency Firestore Sync (Dirty-Checked Human ~135ms + Batched Non-Host Patches ~200ms + Serialized Host World ~320ms)
+      if (!isHost && currentRoom.status === "active" && !matchFinishTriggeredRef.current) {
+        flushPendingWorldPatches(false);
+      }
+
+      const curLocal = localRef.current;
+      const curPlayerSig = `${curLocal.alive ? 1 : 0}:${Math.round(curLocal.hp)}:${Math.round(
+        curLocal.shield
+      )}:${curLocal.ammo}:${curLocal.kills}:${curLocal.hasMedallion ? 1 : 0}:${Math.round(
+        curLocal.x
+      )}:${Math.round(curLocal.y)}:${curLocal.aimAngle.toFixed(2)}:${curLocal.lastShotId}`;
+
       const shouldFlushPlayer =
         currentRoom.status === "active" &&
         !matchFinishTriggeredRef.current &&
-        (syncNowRef.current || now - lastPlayerSyncMs >= 100);
+        (syncNowRef.current ||
+          (now - lastPlayerSyncMs >= 135 && curPlayerSig !== lastSentPlayerSigRef.current));
 
       if (shouldFlushPlayer) {
         if (playerSyncInFlightRef.current) {
@@ -3747,48 +3965,45 @@ export default function BattleRoyaleCanvas({
           playerSyncPendingRef.current = false;
           playerSyncInFlightRef.current = true;
           lastPlayerSyncMs = now;
-          const flushLocalState = () => {
-            const cur = localRef.current;
-            void syncLocalPlayerState({
-              db,
-              roomCode: currentRoom.roomCode,
-              playerId: currentPlayerId,
-              state: {
-                alive: cur.alive,
-                hp: cur.hp,
-                shield: cur.shield,
-                ammo: cur.ammo,
-                kills: cur.kills,
-                hasMedallion: cur.hasMedallion,
-                questionsCorrect: cur.questionsCorrect,
-                questionsAttempted: cur.questionsAttempted,
-                x: cur.x,
-                y: cur.y,
-                aimAngle: cur.aimAngle,
-                exposedUntilMs: cur.exposedUntilMs,
-                placement: cur.placement,
-                lastShotId: cur.lastShotId,
-                lastShotX: cur.lastShotX,
-                lastShotY: cur.lastShotY,
-                lastShotVx: cur.lastShotVx,
-                lastShotVy: cur.lastShotVy,
-                lastShotAtMs: cur.lastShotAtMs,
-              },
-            })
-              .catch(() => {})
-              .finally(() => {
-                playerSyncInFlightRef.current = false;
-                if (
-                  playerSyncPendingRef.current &&
-                  roomRef.current.status === "active" &&
-                  !matchFinishTriggeredRef.current
-                ) {
-                  playerSyncPendingRef.current = false;
-                  syncNowRef.current = true;
-                }
-              });
-          };
-          flushLocalState();
+          lastSentPlayerSigRef.current = curPlayerSig;
+          void syncLocalPlayerState({
+            db,
+            roomCode: currentRoom.roomCode,
+            playerId: currentPlayerId,
+            state: {
+              alive: curLocal.alive,
+              hp: curLocal.hp,
+              shield: curLocal.shield,
+              ammo: curLocal.ammo,
+              kills: curLocal.kills,
+              hasMedallion: curLocal.hasMedallion,
+              questionsCorrect: curLocal.questionsCorrect,
+              questionsAttempted: curLocal.questionsAttempted,
+              x: curLocal.x,
+              y: curLocal.y,
+              aimAngle: curLocal.aimAngle,
+              exposedUntilMs: curLocal.exposedUntilMs,
+              placement: curLocal.placement,
+              lastShotId: curLocal.lastShotId,
+              lastShotX: curLocal.lastShotX,
+              lastShotY: curLocal.lastShotY,
+              lastShotVx: curLocal.lastShotVx,
+              lastShotVy: curLocal.lastShotVy,
+              lastShotAtMs: curLocal.lastShotAtMs,
+            },
+          })
+            .catch(() => {})
+            .finally(() => {
+              playerSyncInFlightRef.current = false;
+              if (
+                playerSyncPendingRef.current &&
+                roomRef.current.status === "active" &&
+                !matchFinishTriggeredRef.current
+              ) {
+                playerSyncPendingRef.current = false;
+                syncNowRef.current = true;
+              }
+            });
         }
       }
 
@@ -3796,9 +4011,11 @@ export default function BattleRoyaleCanvas({
         isHost &&
         currentRoom.status === "active" &&
         !matchFinishTriggeredRef.current &&
-        now - lastWorldSyncMs >= 240
+        !worldSyncInFlightRef.current &&
+        now - lastWorldSyncMs >= 320
       ) {
         lastWorldSyncMs = now;
+        worldSyncInFlightRef.current = true;
         const activeCrates = Array.from<SyncedCrateState>(
           crateStatesRef.current.values()
         ).filter((c) => c.lockedUntilMs > now || c.depletedUntilMs > now);
@@ -3810,7 +4027,11 @@ export default function BattleRoyaleCanvas({
           firewalls: firewallsRef.current,
           crateStates: activeCrates,
           killFeed: killFeedRef.current,
-        }).catch(() => {});
+        })
+          .catch(() => {})
+          .finally(() => {
+            worldSyncInFlightRef.current = false;
+          });
       }
 
       rafId = requestAnimationFrame(tickFrame);
@@ -3824,8 +4045,10 @@ export default function BattleRoyaleCanvas({
     currentPlayerId,
     layout,
     meFromRoom?.displayName,
+    flushPendingWorldPatches,
     handleMiniBozzDefeated,
     pushKillFeed,
+    queueWorldPatch,
     showToast,
     spawnBurst,
     spawnLabel,
@@ -3878,7 +4101,7 @@ export default function BattleRoyaleCanvas({
   return (
     <div className="space-y-3">
       {/* Compact Top Telemetry Strip */}
-      <div className="specular-panel backdrop-blur-2xl border border-white/10 rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-4">
+      <div className="bg-zinc-950/95 border border-white/10 rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3.5 text-xs font-mono tabular-nums">
           <span className="inline-flex items-center gap-1.5 text-emerald-400 font-bold">
             <Trophy className="h-4 w-4" />
@@ -3991,7 +4214,7 @@ export default function BattleRoyaleCanvas({
           {hud.killFeed.slice(0, 4).map((item, idx) => (
             <div
               key={`${idx}-${item}`}
-              className="px-2.5 py-1 bg-zinc-950/80 backdrop-blur-md border border-white/10 rounded-lg text-[11px] font-mono text-zinc-200 truncate"
+              className="px-2.5 py-1 bg-zinc-950/90 border border-white/10 rounded-lg text-[11px] font-mono text-zinc-200 truncate"
             >
               {item}
             </div>
@@ -4003,7 +4226,7 @@ export default function BattleRoyaleCanvas({
           type="button"
           onClick={() => setShowFullMap((m) => !m)}
           title="Click or press [M] for full Gbozz Arena Map"
-          className="absolute top-3 right-3 p-1.5 bg-zinc-950/90 hover:bg-zinc-900 backdrop-blur-md border border-white/15 rounded-xl space-y-1 cursor-pointer text-left"
+          className="absolute top-3 right-3 p-1.5 bg-zinc-950/92 hover:bg-zinc-900 border border-white/15 rounded-xl space-y-1 cursor-pointer text-left"
         >
           <canvas
             ref={minimapRef}
@@ -4026,10 +4249,10 @@ export default function BattleRoyaleCanvas({
         {/* Loot Toast */}
         {lootBanner && (
           <div
-            className={`pointer-events-none absolute top-14 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl border backdrop-blur-xl text-center animate-reveal-pop ${
+            className={`pointer-events-none absolute top-14 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl border text-center animate-reveal-pop ${
               lootBanner.tone === "reward"
-                ? "bg-emerald-950/90 border-emerald-400/60 text-emerald-100"
-                : "bg-red-950/90 border-red-400/60 text-red-100"
+                ? "bg-emerald-950/95 border-emerald-400/60 text-emerald-100"
+                : "bg-red-950/95 border-red-400/60 text-red-100"
             }`}
           >
             <div className="text-xs font-mono font-extrabold">{lootBanner.title}</div>
@@ -4071,7 +4294,7 @@ export default function BattleRoyaleCanvas({
         )}
 
         {/* Bottom HUD: Separate HP & Shield Bars + 4-Slot Weapon Bar + Firewall & Healing */}
-        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 w-[min(97%,940px)] bg-zinc-950/92 backdrop-blur-xl border border-white/15 rounded-xl px-3.5 py-2.5 space-y-2 font-mono text-xs tabular-nums">
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 w-[min(97%,940px)] bg-zinc-950/94 border border-white/15 rounded-xl px-3.5 py-2.5 space-y-2 font-mono text-xs tabular-nums">
           <div className="flex flex-wrap items-center justify-between gap-3">
             {/* Separate HP & Shield Bars */}
             <div className="flex items-center gap-3 flex-1 min-w-[260px]">
