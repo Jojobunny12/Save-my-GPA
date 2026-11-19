@@ -4,6 +4,7 @@ import {
   doc,
   getDoc,
   onSnapshot,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -58,6 +59,25 @@ export function getOrCreateClientToken(storageKey: string, prefix: string): stri
       `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
     );
     window.localStorage.setItem(storageKey, generated);
+    return generated;
+  } catch {
+    return sanitizeId(`${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
+  }
+}
+
+export function getOrCreateSessionToken(storageKey: string, prefix: string): string {
+  if (typeof window === "undefined") {
+    return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+  }
+  try {
+    const existing = window.sessionStorage.getItem(storageKey);
+    if (existing && /^[a-zA-Z0-9_-]{6,64}$/.test(existing)) {
+      return existing;
+    }
+    const generated = sanitizeId(
+      `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+    );
+    window.sessionStorage.setItem(storageKey, generated);
     return generated;
   } catch {
     return sanitizeId(`${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
@@ -437,7 +457,7 @@ export async function createBattleRoom(params: {
     title: cleanTitle,
     status: "lobby",
     targetPlayers: TARGET_LOBBY_SIZE,
-    countdownEndsAtMs: Date.now() + LOBBY_COUNTDOWN_SEC * 1000,
+    countdownEndsAtMs: 0,
     matchStartedAtMs: 0,
     arenaSeed,
     questions,
@@ -736,19 +756,22 @@ export async function hostLaunchRoyaleMatch(params: {
   db: Firestore;
   room: StudyRoomDocument;
   players: StudyPlayerDocument[];
+  fillWithBots?: boolean;
 }): Promise<void> {
-  const { db, room, players } = params;
+  const { db, room, players, fillWithBots = true } = params;
   if (room.status !== "lobby") return;
 
   const layout = generateArenaLayout(room.arenaSeed);
-  const bots = generateBackfillBots({
-    existingHumanCount: players.length,
-    targetPlayers: room.targetPlayers || TARGET_LOBBY_SIZE,
-    arenaSeed: room.arenaSeed,
-    obstacles: layout.obstacles,
-    riverPoints: layout.riverPoints,
-    bridges: layout.bridges,
-  });
+  const bots = fillWithBots
+    ? generateBackfillBots({
+        existingHumanCount: players.length,
+        targetPlayers: room.targetPlayers || TARGET_LOBBY_SIZE,
+        arenaSeed: room.arenaSeed,
+        obstacles: layout.obstacles,
+        riverPoints: layout.riverPoints,
+        bridges: layout.bridges,
+      })
+    : [];
   const miniBozzes = generateMiniBozzes(layout.obstacles);
 
   const batch = writeBatch(db);
@@ -758,7 +781,9 @@ export async function hostLaunchRoyaleMatch(params: {
     firewalls: [],
     crateStates: [],
     killFeed: [
-      `Drop live · ${players.length} human + ${bots.length} bots · ${miniBozzes.length} Mini-Bozzes`,
+      fillWithBots
+        ? `Drop live · ${players.length} humans + ${bots.length} bots · ${miniBozzes.length} Mini-Bozzes`
+        : `Friends Battle live · ${players.length} challengers · ${miniBozzes.length} Mini-Bozzes`,
     ],
     updatedAt: serverTimestamp(),
   } satisfies StudyWorldStateDocument);
@@ -832,6 +857,72 @@ export async function syncLocalPlayerState(params: {
     });
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function publishWorldPatch(params: {
+  db: Firestore;
+  roomCode: string;
+  addFirewall?: FirewallWall;
+  crateState?: SyncedCrateState;
+  miniBozzDamage?: { id: string; hp: number; shield: number; alive: boolean };
+  killFeedEntry?: string;
+}): Promise<void> {
+  const { db, roomCode, addFirewall, crateState, miniBozzDamage, killFeedEntry } = params;
+  const worldRef = doc(db, "studyRooms", roomCode, "world", "state");
+  const now = Date.now();
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(worldRef);
+      if (!snap.exists()) return;
+      const cur = snap.data() as StudyWorldStateDocument;
+
+      let nextFirewalls = (cur.firewalls || []).filter(
+        (fw) => fw.hp > 0 && fw.expiresAtMs > now
+      );
+      if (addFirewall && !nextFirewalls.some((fw) => fw.id === addFirewall.id)) {
+        nextFirewalls = [...nextFirewalls, addFirewall].slice(-24);
+      }
+
+      let nextCrates = (cur.crateStates || []).filter(
+        (c) => c.lockedUntilMs > now || c.depletedUntilMs > now
+      );
+      if (crateState) {
+        nextCrates = [
+          ...nextCrates.filter((c) => c.crateId !== crateState.crateId),
+          crateState,
+        ].slice(-60);
+      }
+
+      let nextMiniBozzes = cur.miniBozzes || [];
+      if (miniBozzDamage) {
+        nextMiniBozzes = nextMiniBozzes.map((mb) =>
+          mb.id === miniBozzDamage.id
+            ? {
+                ...mb,
+                hp: Math.min(mb.hp, miniBozzDamage.hp),
+                shield: Math.min(mb.shield, miniBozzDamage.shield),
+                alive: mb.alive && miniBozzDamage.alive,
+              }
+            : mb
+        );
+      }
+
+      const nextFeed = killFeedEntry
+        ? [killFeedEntry, ...(cur.killFeed || [])].slice(0, 10)
+        : (cur.killFeed || []).slice(0, 10);
+
+      tx.set(worldRef, {
+        bots: (cur.bots || []).slice(0, 20),
+        miniBozzes: nextMiniBozzes.slice(0, 4),
+        firewalls: nextFirewalls,
+        crateStates: nextCrates,
+        killFeed: nextFeed,
+        updatedAt: serverTimestamp(),
+      } satisfies StudyWorldStateDocument);
+    });
+  } catch {
+    // Non-fatal patch conflict under contention; next tick reconciles
   }
 }
 

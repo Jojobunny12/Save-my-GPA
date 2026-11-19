@@ -44,6 +44,7 @@ import {
 import { playBattleSfx } from "./battleSfx";
 import {
   hostFinishRoyaleMatch,
+  publishWorldPatch,
   syncLocalPlayerState,
   syncWorldState,
 } from "./roomService";
@@ -181,6 +182,8 @@ interface HudSnapshot {
   alive: boolean;
   aliveCount: number;
   totalCount: number;
+  humanAliveCount: number;
+  humanTotalCount: number;
   miniBozzesAlive: number;
   biomeName: string;
   biomeSubtitle: string;
@@ -230,6 +233,54 @@ function getProjectileColor(
   if (archetype === "scatter") return "#38BDF8";
   if (archetype === "railgun") return "#E879F9";
   return "#10B981";
+}
+
+const ARCH_CODE: Record<WeaponArchetype, string> = {
+  blaster: "b",
+  cannon: "c",
+  scatter: "s",
+  railgun: "r",
+};
+const CODE_TO_ARCH: Record<string, WeaponArchetype> = {
+  b: "blaster",
+  c: "cannon",
+  s: "scatter",
+  r: "railgun",
+};
+const CODE_TO_RARITY: Record<string, LootRarity> = {
+  C: "Common",
+  R: "Rare",
+  E: "Epic",
+  L: "Legendary",
+  M: "Mythic",
+};
+
+function encodeShotId(
+  now: number,
+  archetype: WeaponArchetype,
+  damage: number,
+  rarity: LootRarity
+): string {
+  const ts = (now % 10000000).toString(36);
+  const rnd = Math.floor(Math.random() * 1295).toString(36);
+  return `s_${ts}_${rnd}|${ARCH_CODE[archetype]}:${Math.round(damage)}:${rarity[0]}`.slice(0, 48);
+}
+
+function decodeShotId(shotId: string): {
+  archetype: WeaponArchetype;
+  damage: number;
+  rarity: LootRarity;
+} {
+  const pipeIdx = shotId.indexOf("|");
+  if (pipeIdx === -1) {
+    return { archetype: "blaster", damage: 20, rarity: "Rare" };
+  }
+  const meta = shotId.slice(pipeIdx + 1).split(":");
+  const archetype = CODE_TO_ARCH[meta[0]] || "blaster";
+  const parsedDmg = Number(meta[1]);
+  const damage = Number.isFinite(parsedDmg) && parsedDmg > 0 ? Math.min(200, parsedDmg) : 20;
+  const rarity = CODE_TO_RARITY[meta[2]] || "Rare";
+  return { archetype, damage, rarity };
 }
 
 export default function BattleRoyaleCanvas({
@@ -303,6 +354,14 @@ export default function BattleRoyaleCanvas({
   });
 
   const remotePlayersRef = useRef<StudyPlayerDocument[]>(players);
+  const remoteSmoothRef = useRef<
+    Map<string, { x: number; y: number; aimAngle: number }>
+  >(new Map());
+  const prevRemoteAliveRef = useRef<Map<string, boolean>>(new Map());
+  const lastHitRemoteAtRef = useRef<Map<string, number>>(new Map());
+  const creditedHumanKillsRef = useRef<Set<string>>(new Set());
+  const recentlyPlacedWallIdsRef = useRef<Map<string, number>>(new Map());
+  const syncNowRef = useRef<boolean>(false);
   const botsRef = useRef<BotState[]>(worldState?.bots || []);
   const miniBozzesRef = useRef<MiniBozzState[]>(
     worldState?.miniBozzes && worldState.miniBozzes.length > 0
@@ -391,6 +450,8 @@ export default function BattleRoyaleCanvas({
     alive: true,
     aliveCount: players.length + (worldState?.bots?.length || 0),
     totalCount: players.length + (worldState?.bots?.length || 0),
+    humanAliveCount: players.filter((p) => p.alive).length,
+    humanTotalCount: players.length,
     miniBozzesAlive: miniBozzesRef.current.filter((m) => m.alive).length,
     biomeName: "Bozz Citadel",
     biomeSubtitle: "Drop Live",
@@ -416,26 +477,83 @@ export default function BattleRoyaleCanvas({
     const now = Date.now();
     for (const p of players) {
       if (p.playerId === currentPlayerId) continue;
+
+      if (!remoteSmoothRef.current.has(p.playerId)) {
+        remoteSmoothRef.current.set(p.playerId, {
+          x: p.x,
+          y: p.y,
+          aimAngle: p.aimAngle,
+        });
+      }
+
+      const prevAlive = prevRemoteAliveRef.current.get(p.playerId);
+      if (prevAlive === true && !p.alive) {
+        const hitAt = lastHitRemoteAtRef.current.get(p.playerId) || 0;
+        if (
+          now - hitAt < 3000 &&
+          !creditedHumanKillsRef.current.has(p.playerId)
+        ) {
+          creditedHumanKillsRef.current.add(p.playerId);
+          const local = localRef.current;
+          local.kills += 1;
+          local.shield = Math.min(100, local.shield + 20);
+          local.hp = Math.min(100, local.hp + 10);
+          local.tokens = Math.min(12, local.tokens + 1);
+          playBattleSfx("elim", mutedRef.current);
+          spawnLabel(local.x, local.y, `ELIMINATED ${p.displayName}! +20 SHD`, "#10B981");
+        }
+      }
+      prevRemoteAliveRef.current.set(p.playerId, p.alive);
+
       if (
         p.lastShotId &&
-        now - p.lastShotAtMs < 1500 &&
+        now - p.lastShotAtMs < 1800 &&
         !seenShotIdsRef.current.has(p.lastShotId)
       ) {
         seenShotIdsRef.current.add(p.lastShotId);
-        projectilesRef.current.push({
-          id: p.lastShotId,
-          ownerId: p.playerId,
-          ownerName: p.displayName,
-          isBot: false,
-          x: p.lastShotX,
-          y: p.lastShotY,
-          vx: p.lastShotVx,
-          vy: p.lastShotVy,
-          damage: 20,
-          archetype: "blaster",
-          rarity: "Rare",
-          createdAtMs: p.lastShotAtMs,
-        });
+        const decoded = decodeShotId(p.lastShotId);
+        const weaponCfg = WEAPON_META[decoded.archetype];
+        if (decoded.archetype === "scatter") {
+          const baseAng = Math.atan2(p.lastShotVy, p.lastShotVx);
+          const spd = Math.hypot(p.lastShotVx, p.lastShotVy) || weaponCfg.speed;
+          for (let i = 0; i < weaponCfg.pellets; i++) {
+            const offset =
+              ((i / Math.max(1, weaponCfg.pellets - 1)) - 0.5) * weaponCfg.spreadRad;
+            projectilesRef.current.push({
+              id: `${p.lastShotId}_p${i}`,
+              ownerId: p.playerId,
+              ownerName: p.displayName,
+              isBot: false,
+              x: p.lastShotX,
+              y: p.lastShotY,
+              vx: Math.cos(baseAng + offset) * spd,
+              vy: Math.sin(baseAng + offset) * spd,
+              damage: decoded.damage,
+              archetype: "scatter",
+              rarity: decoded.rarity,
+              splashRadius: 0,
+              maxLifeMs: weaponCfg.maxLifeMs,
+              createdAtMs: p.lastShotAtMs,
+            });
+          }
+        } else {
+          projectilesRef.current.push({
+            id: p.lastShotId,
+            ownerId: p.playerId,
+            ownerName: p.displayName,
+            isBot: false,
+            x: p.lastShotX,
+            y: p.lastShotY,
+            vx: p.lastShotVx,
+            vy: p.lastShotVy,
+            damage: decoded.damage,
+            archetype: decoded.archetype,
+            rarity: decoded.rarity,
+            splashRadius: weaponCfg.splashRadius,
+            maxLifeMs: weaponCfg.maxLifeMs,
+            createdAtMs: p.lastShotAtMs,
+          });
+        }
       }
     }
   }, [players, currentPlayerId]);
@@ -449,9 +567,19 @@ export default function BattleRoyaleCanvas({
       if (worldState.miniBozzes && worldState.miniBozzes.length > 0) {
         miniBozzesRef.current = worldState.miniBozzes;
       }
-      firewallsRef.current = (worldState.firewalls || []).filter(
+      const incomingWalls = (worldState.firewalls || []).filter(
         (fw) => fw.hp > 0 && fw.expiresAtMs > now
       );
+      const keptLocal = firewallsRef.current.filter((fw) => {
+        const graceUntil = recentlyPlacedWallIdsRef.current.get(fw.id) || 0;
+        return (
+          fw.hp > 0 &&
+          fw.expiresAtMs > now &&
+          graceUntil > now &&
+          !incomingWalls.some((inc) => inc.id === fw.id)
+        );
+      });
+      firewallsRef.current = [...incomingWalls, ...keptLocal];
     } else {
       if (botsRef.current.length === 0 && (worldState.bots?.length || 0) > 0) {
         botsRef.current = worldState.bots;
@@ -461,6 +589,15 @@ export default function BattleRoyaleCanvas({
         (worldState.miniBozzes?.length || 0) > 0
       ) {
         miniBozzesRef.current = worldState.miniBozzes;
+      } else if (worldState.miniBozzes && worldState.miniBozzes.length > 0) {
+        for (const inc of worldState.miniBozzes) {
+          const cur = miniBozzesRef.current.find((m) => m.id === inc.id);
+          if (cur) {
+            cur.hp = Math.min(cur.hp, inc.hp);
+            cur.shield = Math.min(cur.shield, inc.shield);
+            if (!inc.alive) cur.alive = false;
+          }
+        }
       }
       for (const fw of worldState.firewalls || []) {
         if (
@@ -804,15 +941,24 @@ export default function BattleRoyaleCanvas({
       color: "#38BDF8",
     };
 
+    recentlyPlacedWallIdsRef.current.set(wall.id, now + 3500);
     firewallsRef.current = [
       ...firewallsRef.current.filter((fw) => fw.hp > 0 && fw.expiresAtMs > now),
       wall,
     ].slice(-24);
 
+    if (!isHost) {
+      void publishWorldPatch({
+        db,
+        roomCode: roomRef.current.roomCode,
+        addFirewall: wall,
+      });
+    }
+
     playBattleSfx("buildWall", mutedRef.current);
     spawnBurst(cx, cy, "#38BDF8", 12);
     spawnLabel(cx, cy, "FIREWALL DEPLOYED", "#38BDF8");
-  }, [currentPlayerId, showToast, spawnBurst, spawnLabel]);
+  }, [currentPlayerId, db, isHost, showToast, spawnBurst, spawnLabel]);
 
   const handleDash = useCallback(() => {
     const local = localRef.current;
@@ -904,6 +1050,21 @@ export default function BattleRoyaleCanvas({
             if (mb.hp <= 0) {
               defeated = true;
               handleMiniBozzDefeated(mb, meFromRoom?.displayName || "You", true);
+            }
+            if (!isHost) {
+              void publishWorldPatch({
+                db,
+                roomCode: roomRef.current.roomCode,
+                miniBozzDamage: {
+                  id: mb.id,
+                  hp: mb.hp,
+                  shield: mb.shield,
+                  alive: mb.alive,
+                },
+                killFeedEntry: defeated
+                  ? `${meFromRoom?.displayName || "Player"} defeated Mini-Bozz ${mb.name}!`
+                  : undefined,
+              });
             }
           }
 
@@ -1025,11 +1186,19 @@ export default function BattleRoyaleCanvas({
           utilityText = "Speed Surge";
         }
 
-        crateStatesRef.current.set(crate.id, {
+        const unlockedState: SyncedCrateState = {
           crateId: crate.id,
           lockedUntilMs: 0,
           depletedUntilMs: now + 22000,
-        });
+        };
+        crateStatesRef.current.set(crate.id, unlockedState);
+        if (!isHost) {
+          void publishWorldPatch({
+            db,
+            roomCode: roomRef.current.roomCode,
+            crateState: unlockedState,
+          });
+        }
 
         const rarityColor = RARITY_META[rarity].color;
         const weaponTitle = `${rarity} ${WEAPON_META[droppedArchetype].name}`;
@@ -1054,13 +1223,22 @@ export default function BattleRoyaleCanvas({
         showToast(`${weaponTitle} Equipped!`, summaryText, "reward");
       } else {
         local.streak = 0;
-        crateStatesRef.current.set(crate.id, {
+        const lockedState: SyncedCrateState = {
           crateId: crate.id,
           lockedUntilMs: now + 5000,
           depletedUntilMs: 0,
-        });
+        };
+        crateStatesRef.current.set(crate.id, lockedState);
+        if (!isHost) {
+          void publishWorldPatch({
+            db,
+            roomCode: roomRef.current.roomCode,
+            crateState: lockedState,
+          });
+        }
         local.hp = Math.max(0, local.hp - 10);
         local.exposedUntilMs = now + 6000;
+        syncNowRef.current = true;
         damageFlashRef.current = 0.35;
         screenShakeRef.current = 7;
 
@@ -1184,8 +1362,8 @@ export default function BattleRoyaleCanvas({
   useEffect(() => {
     if (completedReportedRef.current) return;
     const totalPlayers = Math.max(
-      players.length + (worldState?.bots?.length || 0),
-      room.targetPlayers || 20
+      2,
+      players.length + (worldState?.bots?.length || 0)
     );
 
     if (room.status === "finished") {
@@ -1547,12 +1725,22 @@ export default function BattleRoyaleCanvas({
           }
 
           if (centerProj) {
-            local.lastShotId = centerProj.id;
-            local.lastShotX = centerProj.x;
-            local.lastShotY = centerProj.y;
-            local.lastShotVx = centerProj.vx;
-            local.lastShotVy = centerProj.vy;
+            local.lastShotId = encodeShotId(
+              now,
+              local.activeWeapon,
+              scaledDmg,
+              activeRarity
+            );
+            local.lastShotX = Math.round(centerProj.x);
+            local.lastShotY = Math.round(centerProj.y);
+            local.lastShotVx = Math.round(
+              Math.cos(local.aimAngle) * weaponCfg.speed
+            );
+            local.lastShotVy = Math.round(
+              Math.sin(local.aimAngle) * weaponCfg.speed
+            );
             local.lastShotAtMs = now;
+            syncNowRef.current = true;
           }
 
           if (local.activeWeapon === "cannon") {
@@ -1985,6 +2173,7 @@ export default function BattleRoyaleCanvas({
         ) {
           consumed = true;
           const died = applyDamage(local, proj.damage, true);
+          syncNowRef.current = true;
           damageFlashRef.current = 0.28;
           screenShakeRef.current = Math.max(screenShakeRef.current, 6);
           spawnBurst(proj.x, proj.y, "#EF4444", 10);
@@ -2020,6 +2209,21 @@ export default function BattleRoyaleCanvas({
                     proj.ownerName,
                     proj.ownerId === currentPlayerId
                   );
+                }
+                if (!isHost && proj.ownerId === currentPlayerId) {
+                  void publishWorldPatch({
+                    db,
+                    roomCode: currentRoom.roomCode,
+                    miniBozzDamage: {
+                      id: mb.id,
+                      hp: mb.hp,
+                      shield: mb.shield,
+                      alive: mb.alive,
+                    },
+                    killFeedEntry: died
+                      ? `${proj.ownerName} defeated Mini-Bozz ${mb.name}!`
+                      : undefined,
+                  });
                 }
               }
               break;
@@ -2082,21 +2286,29 @@ export default function BattleRoyaleCanvas({
           }
         }
 
-        // Check hit on Remote Humans
+        // Check hit on Remote Humans (using smoothed live positions)
         if (!consumed && proj.ownerId === currentPlayerId) {
           for (const rp of remotePlayersRef.current) {
             if (!rp.alive || rp.playerId === currentPlayerId) continue;
-            if (Math.hypot(proj.x - rp.x, proj.y - rp.y) <= PLAYER_RADIUS + 6) {
+            const sm = remoteSmoothRef.current.get(rp.playerId);
+            const rpx = sm ? sm.x : rp.x;
+            const rpy = sm ? sm.y : rp.y;
+            if (Math.hypot(proj.x - rpx, proj.y - rpy) <= PLAYER_RADIUS + 8) {
               consumed = true;
-              spawnBurst(proj.x, proj.y, "#10B981", 9);
-              spawnLabel(rp.x, rp.y, `-${proj.damage}`, "#10B981");
+              lastHitRemoteAtRef.current.set(rp.playerId, now);
+              spawnBurst(proj.x, proj.y, "#38BDF8", 9);
+              spawnLabel(rpx, rpy, `-${proj.damage}`, "#38BDF8");
               playBattleSfx("hit", mutedRef.current);
-              if (rp.hp + rp.shield <= proj.damage) {
+              if (
+                rp.hp + rp.shield <= proj.damage &&
+                !creditedHumanKillsRef.current.has(rp.playerId)
+              ) {
+                creditedHumanKillsRef.current.add(rp.playerId);
                 local.kills += 1;
                 local.shield = Math.min(100, local.shield + 20);
                 local.hp = Math.min(100, local.hp + 10);
                 local.tokens = Math.min(12, local.tokens + 1);
-                spawnLootOrb(rp.x, rp.y, {
+                spawnLootOrb(rpx, rpy, {
                   ammo: 12,
                   shield: 25,
                   tokens: 2,
@@ -2798,10 +3010,29 @@ export default function BattleRoyaleCanvas({
 
           for (const rp of remotePlayersRef.current) {
             if (!rp.alive || rp.playerId === currentPlayerId) continue;
-            drawContestant({
+            const sm = remoteSmoothRef.current.get(rp.playerId) || {
               x: rp.x,
               y: rp.y,
               aimAngle: rp.aimAngle,
+            };
+            sm.x += (rp.x - sm.x) * Math.min(1, dt * 15);
+            sm.y += (rp.y - sm.y) * Math.min(1, dt * 15);
+            sm.aimAngle = rp.aimAngle;
+            remoteSmoothRef.current.set(rp.playerId, sm);
+
+            // Distinct Cyan Challenger Ring so friends/rivals stand out cleanly
+            ctx.strokeStyle = "rgba(56, 189, 248, 0.72)";
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.arc(sm.x, sm.y, PLAYER_RADIUS + 8, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            drawContestant({
+              x: sm.x,
+              y: sm.y,
+              aimAngle: sm.aimAngle,
               name: rp.displayName,
               hp: rp.hp,
               shield: rp.shield,
@@ -2812,7 +3043,7 @@ export default function BattleRoyaleCanvas({
               exposed: rp.exposedUntilMs > now,
               speedBoost: false,
               answering: false,
-              recentlyFired: now - rp.lastShotAtMs < 1200,
+              recentlyFired: true,
             });
           }
 
@@ -2917,6 +3148,43 @@ export default function BattleRoyaleCanvas({
           ctx.stroke();
 
           ctx.restore();
+
+          // Edge-of-Screen Compass Indicators toward Live Human Challengers so friends can find each other!
+          if (local.alive) {
+            for (const rp of remotePlayersRef.current) {
+              if (!rp.alive || rp.playerId === currentPlayerId) continue;
+              const sm = remoteSmoothRef.current.get(rp.playerId);
+              const rx = sm ? sm.x : rp.x;
+              const ry = sm ? sm.y : rp.y;
+              const screenX = rx - camX;
+              const screenY = ry - camY;
+              if (screenX >= 20 && screenX <= cw - 20 && screenY >= 20 && screenY <= ch - 20) {
+                continue;
+              }
+              const ang = Math.atan2(ry - local.y, rx - local.x);
+              const margin = 46;
+              const clampedX = Math.max(margin, Math.min(cw - margin, cw / 2 + Math.cos(ang) * (cw * 0.44)));
+              const clampedY = Math.max(margin + 20, Math.min(ch - 75, ch / 2 + Math.sin(ang) * (ch * 0.42)));
+              const distMeters = Math.round(Math.hypot(rx - local.x, ry - local.y) / 14);
+
+              ctx.save();
+              ctx.translate(clampedX, clampedY);
+              ctx.fillStyle = "rgba(8, 12, 22, 0.88)";
+              ctx.strokeStyle = "#38BDF8";
+              ctx.lineWidth = 1.8;
+              ctx.beginPath();
+              ctx.roundRect(-42, -13, 84, 26, 7);
+              ctx.fill();
+              ctx.stroke();
+
+              ctx.fillStyle = "#38BDF8";
+              ctx.font = "bold 10px JetBrains Mono, monospace";
+              ctx.textAlign = "center";
+              ctx.textBaseline = "middle";
+              ctx.fillText(`${rp.displayName.slice(0, 7)} ${distMeters}m`, 0, 0);
+              ctx.restore();
+            }
+          }
 
           if (damageFlashRef.current > 0) {
             ctx.fillStyle = `rgba(239, 68, 68, ${damageFlashRef.current})`;
@@ -3041,9 +3309,24 @@ export default function BattleRoyaleCanvas({
         for (const b of botsRef.current) {
           if (b.alive) revealEnemy(b.x, b.y, b.exposedUntilMs > now);
         }
+        // Always show live human challengers on minimap & full map so friends can find & battle each other
         for (const rp of remotePlayersRef.current) {
-          if (rp.alive && rp.playerId !== currentPlayerId) {
-            revealEnemy(rp.x, rp.y, rp.exposedUntilMs > now);
+          if (!rp.alive || rp.playerId === currentPlayerId) continue;
+          const sm = remoteSmoothRef.current.get(rp.playerId);
+          const rx = (sm ? sm.x : rp.x) * scale;
+          const ry = (sm ? sm.y : rp.y) * scale;
+          mctx.fillStyle = "#38BDF8";
+          mctx.strokeStyle = "#FFFFFF";
+          mctx.lineWidth = 1.2;
+          mctx.beginPath();
+          mctx.arc(rx, ry, showLabels ? 6 : 4, 0, Math.PI * 2);
+          mctx.fill();
+          mctx.stroke();
+          if (showLabels) {
+            mctx.fillStyle = "#38BDF8";
+            mctx.font = "bold 10px JetBrains Mono, monospace";
+            mctx.textAlign = "center";
+            mctx.fillText(rp.displayName, rx, ry - 9);
           }
         }
 
@@ -3133,6 +3416,8 @@ export default function BattleRoyaleCanvas({
           alive: local.alive,
           aliveCount,
           totalCount,
+          humanAliveCount: aliveHumans,
+          humanTotalCount: remotePlayersRef.current.length,
           miniBozzesAlive: miniBozzesRef.current.filter((m) => m.alive).length,
           biomeName: currentBiome.name,
           biomeSubtitle: currentBiome.subtitle,
@@ -3189,12 +3474,13 @@ export default function BattleRoyaleCanvas({
         }
       }
 
-      // 8. Throttled Firestore Sync for Human Player (~350ms) & Host World (~550ms)
+      // 8. Responsive Firestore Sync for Human Player (~110ms + instant on shot/hit/death) & Host World (~450ms)
       if (
         currentRoom.status === "active" &&
         !matchFinishTriggeredRef.current &&
-        now - lastPlayerSyncMs >= 350
+        (syncNowRef.current || now - lastPlayerSyncMs >= 110)
       ) {
+        syncNowRef.current = false;
         lastPlayerSyncMs = now;
         void syncLocalPlayerState({
           db,
@@ -3228,7 +3514,7 @@ export default function BattleRoyaleCanvas({
         isHost &&
         currentRoom.status === "active" &&
         !matchFinishTriggeredRef.current &&
-        now - lastWorldSyncMs >= 550
+        now - lastWorldSyncMs >= 450
       ) {
         lastWorldSyncMs = now;
         const activeCrates = Array.from<SyncedCrateState>(
@@ -3315,6 +3601,11 @@ export default function BattleRoyaleCanvas({
           <span className="inline-flex items-center gap-1.5 text-emerald-400 font-bold">
             <Trophy className="h-4 w-4" />
             Alive: {hud.aliveCount} / {hud.totalCount}
+          </span>
+          <span className="text-zinc-600">·</span>
+          <span className="inline-flex items-center gap-1.5 text-sky-300 font-bold">
+            <Swords className="h-3.5 w-3.5 text-sky-400" />
+            Humans: {hud.humanAliveCount}/{hud.humanTotalCount}
           </span>
           <span className="text-zinc-600">·</span>
           <span className="inline-flex items-center gap-1.5 text-purple-300">

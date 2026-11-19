@@ -5,7 +5,6 @@ import {
   AlertCircle,
   Award,
   Check,
-  Clock,
   Copy,
   Crosshair,
   Crown,
@@ -27,7 +26,6 @@ import {
 import {
   ARENA_POIS,
   ARENA_SIZE,
-  LOBBY_COUNTDOWN_SEC,
   TARGET_LOBBY_SIZE,
   TIER_CONFIG,
   generateArenaLayout,
@@ -41,7 +39,7 @@ import {
   calibrateStudyQuestionsWithAI,
   createBattleRoom,
   getOrCreateClientToken,
-  hostExtendLobbyCountdown,
+  getOrCreateSessionToken,
   hostLaunchRoyaleMatch,
   joinBattleRoom,
   loadOrCreateBattleProfile,
@@ -390,12 +388,16 @@ function StudyBattleInner({
     initialJoinCode ? "join" : "host"
   );
 
-  // Persistent identity tokens for authoritative host, player & ranked profile
+  // Persistent ranked profile ID (localStorage) + per-tab session IDs (sessionStorage)
+  // so multiple tabs or devices can join the same match cleanly without colliding
+  const [profileId] = useState(() =>
+    getOrCreateClientToken("bozz_study_battle_player_id", "player")
+  );
   const [hostId] = useState(() =>
-    getOrCreateClientToken("bozz_study_battle_host_id", "host")
+    getOrCreateSessionToken("bozz_session_host_id", "host")
   );
   const [playerId] = useState(() =>
-    getOrCreateClientToken("bozz_study_battle_player_id", "player")
+    getOrCreateSessionToken("bozz_session_player_id", "player")
   );
 
   // Ranked ELO/MMR profile state
@@ -411,6 +413,7 @@ function StudyBattleInner({
   );
   const [selectedDropPoiId, setSelectedDropPoiId] =
     useState<PoiId>("prompt_plaza");
+  const [fillWithBots, setFillWithBots] = useState(true);
   const [questionsJson, setQuestionsJson] = useState(() => {
     if (initialQuestions && initialQuestions.length > 0) {
       return serializeBattleQuestions(initialQuestions);
@@ -428,15 +431,12 @@ function StudyBattleInner({
   const [room, setRoom] = useState<StudyRoomDocument | null>(null);
   const [players, setPlayers] = useState<StudyPlayerDocument[]>([]);
   const [worldState, setWorldState] = useState<StudyWorldStateDocument | null>(null);
-  const [lobbySecLeft, setLobbySecLeft] = useState<number>(LOBBY_COUNTDOWN_SEC);
 
   const [isBusy, setIsBusy] = useState(false);
   const [isCalibrating, setIsCalibrating] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copiedType, setCopiedType] = useState<"code" | "link" | null>(null);
   const [muted, setMuted] = useState(false);
-
-  const autoLaunchingRef = useRef(false);
 
   useEffect(() => {
     if (initialQuestions && initialQuestions.length > 0) {
@@ -476,7 +476,7 @@ function StudyBattleInner({
     let active = true;
     try {
       const db = getStudyBattleDb(firebaseConfig);
-      void loadOrCreateBattleProfile(db, playerId, hostName)
+      void loadOrCreateBattleProfile(db, profileId, hostName)
         .then((loaded) => {
           if (!active) return;
           setProfile(loaded);
@@ -494,7 +494,7 @@ function StudyBattleInner({
     return () => {
       active = false;
     };
-  }, [firebaseConfig, playerId]);
+  }, [firebaseConfig, profileId]);
 
   const parsedHostQuestions = useMemo(
     () => parseStudyQuestionsJson(questionsJson),
@@ -533,39 +533,6 @@ function StudyBattleInner({
   }, [activeRoomCode, firebaseConfig]);
 
   const isHost = Boolean(room && room.hostId === hostId);
-
-  // 15-second pre-match countdown + Automatic 20-player AI bot backfill launch
-  useEffect(() => {
-    if (!room || room.status !== "lobby") {
-      autoLaunchingRef.current = false;
-      return;
-    }
-
-    const updateTimer = () => {
-      const sec = Math.max(0, Math.ceil((room.countdownEndsAtMs - Date.now()) / 1000));
-      setLobbySecLeft(sec);
-
-      if (sec <= 0 && isHost && !autoLaunchingRef.current) {
-        autoLaunchingRef.current = true;
-        try {
-          const db = getStudyBattleDb(firebaseConfig);
-          void hostLaunchRoyaleMatch({ db, room, players }).catch((err) => {
-            autoLaunchingRef.current = false;
-            setErrorMsg(
-              err instanceof Error ? err.message : "Failed to auto-launch arena."
-            );
-          });
-        } catch (err) {
-          autoLaunchingRef.current = false;
-          setErrorMsg(err instanceof Error ? err.message : "Launch failed.");
-        }
-      }
-    };
-
-    updateTimer();
-    const interval = setInterval(updateTimer, 250);
-    return () => clearInterval(interval);
-  }, [room, isHost, players, firebaseConfig]);
 
   const handleSelectDropPoi = async (poiId: PoiId) => {
     setSelectedDropPoiId(poiId);
@@ -624,7 +591,7 @@ function StudyBattleInner({
     try {
       const db = getStudyBattleDb(firebaseConfig);
       const ensuredProfile =
-        profile || (await loadOrCreateBattleProfile(db, playerId, hostName));
+        profile || (await loadOrCreateBattleProfile(db, profileId, hostName));
       setProfile(ensuredProfile);
 
       const code = await createBattleRoom({
@@ -640,7 +607,6 @@ function StudyBattleInner({
       });
 
       if (instantDrop) {
-        autoLaunchingRef.current = true;
         playBattleSfx("jumppad", muted);
         const { doc: fsDoc, getDoc: fsGetDoc } = await import("firebase/firestore");
         const createdSnap = await fsGetDoc(fsDoc(db, "studyRooms", code));
@@ -653,7 +619,7 @@ function StudyBattleInner({
               title: roomTitle,
               status: "lobby" as const,
               targetPlayers: TARGET_LOBBY_SIZE,
-              countdownEndsAtMs: Date.now(),
+              countdownEndsAtMs: 0,
               matchStartedAtMs: 0,
               arenaSeed: 1337,
               questions: parsedHostQuestions.questions,
@@ -699,13 +665,13 @@ function StudyBattleInner({
               lastShotAtMs: 0,
             },
           ],
+          fillWithBots: true,
         });
       } else {
         playBattleSfx("crate", muted);
       }
       setActiveRoomCode(code);
     } catch (err) {
-      autoLaunchingRef.current = false;
       setErrorMsg(err instanceof Error ? err.message : "Failed to create room.");
     } finally {
       setIsBusy(false);
@@ -737,7 +703,7 @@ function StudyBattleInner({
     try {
       const db = getStudyBattleDb(firebaseConfig);
       const ensuredProfile =
-        profile || (await loadOrCreateBattleProfile(db, playerId, playerName));
+        profile || (await loadOrCreateBattleProfile(db, profileId, playerName));
       setProfile(ensuredProfile);
 
       await joinBattleRoom({
@@ -771,30 +737,24 @@ function StudyBattleInner({
     }
   };
 
-  const handleDropNow = async () => {
+  const handleStartMatch = async () => {
     if (!room || !isHost) return;
     setErrorMsg(null);
+    if (!fillWithBots && players.length < 2) {
+      setErrorMsg(
+        "Friends-Only mode requires at least 2 players in the lobby. Share the code/link with a friend or turn AI Bots Backfill on."
+      );
+      return;
+    }
     setIsBusy(true);
-    autoLaunchingRef.current = true;
+    playBattleSfx("jumppad", muted);
     try {
       const db = getStudyBattleDb(firebaseConfig);
-      await hostLaunchRoyaleMatch({ db, room, players });
+      await hostLaunchRoyaleMatch({ db, room, players, fillWithBots });
     } catch (err) {
-      autoLaunchingRef.current = false;
       setErrorMsg(err instanceof Error ? err.message : "Could not launch arena.");
     } finally {
       setIsBusy(false);
-    }
-  };
-
-  const handleExtendTimer = async () => {
-    if (!room || !isHost) return;
-    setErrorMsg(null);
-    try {
-      const db = getStudyBattleDb(firebaseConfig);
-      await hostExtendLobbyCountdown(db, room.roomCode);
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : "Failed to extend timer.");
     }
   };
 
@@ -822,7 +782,7 @@ function StudyBattleInner({
           playerName;
         const { profile: updatedProfile, summary } = await recordMatchRankResult({
           db,
-          profileId: playerId,
+          profileId,
           displayName: activeName,
           placement: stats.placement,
           totalPlayers: stats.totalPlayers,
@@ -841,7 +801,7 @@ function StudyBattleInner({
         );
       }
     },
-    [activeRoomCode, firebaseConfig, players, playerId, hostName, playerName]
+    [activeRoomCode, firebaseConfig, players, playerId, profileId, hostName, playerName]
   );
 
   const handleLeaveRoom = () => {
@@ -851,7 +811,6 @@ function StudyBattleInner({
     setWorldState(null);
     setMatchResult(null);
     setErrorMsg(null);
-    autoLaunchingRef.current = false;
   };
 
   // POST-MATCH "VICTORY BOZZ" SUMMARY SCREEN
@@ -1008,8 +967,22 @@ function StudyBattleInner({
       );
     }
 
-    // STAGING LOBBY WITH 15s AUTO-COUNTDOWN, INTERACTIVE DROP SELECTOR & 20-PLAYER AI BOT BACKFILL
+    // OPEN STAGING LOBBY (NO AUTO-COUNTDOWN): FRIENDS JOIN ANYTIME BEFORE HOST STARTS MATCH
     const slotsRemaining = Math.max(0, (room.targetPlayers || TARGET_LOBBY_SIZE) - players.length);
+    const getNearestPoiName = (px: number, py: number) => {
+      let bestName = ARENA_POIS[0].name;
+      let bestDist = Infinity;
+      for (const poi of ARENA_POIS) {
+        const d = Math.hypot(poi.dropX - px, poi.dropY - py);
+        if (d < bestDist) {
+          bestDist = d;
+          bestName = poi.name;
+        }
+      }
+      return bestName;
+    };
+    const mySelectedPoiName =
+      ARENA_POIS.find((p) => p.id === selectedDropPoiId)?.name || "Arena";
 
     return (
       <div className="space-y-5 animate-reveal-pop">
@@ -1020,8 +993,10 @@ function StudyBattleInner({
             <div className="min-w-0">
               <div className="text-xs font-mono text-zinc-400">
                 Room <strong className="text-white">{room.roomCode}</strong> · Host:{" "}
-                {room.hostName} · Target:{" "}
-                <strong className="text-emerald-400">{room.targetPlayers} Players</strong>
+                {room.hostName} ·{" "}
+                <strong className="text-emerald-400">
+                  {players.length} {players.length === 1 ? "Player" : "Players"} Joined (Open Lobby)
+                </strong>
               </div>
               <h1 className="text-base font-bold text-white truncate">{room.title}</h1>
             </div>
@@ -1086,14 +1061,14 @@ function StudyBattleInner({
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Left: Room Code, Countdown + Interactive POI Drop Selector */}
+          {/* Left: Room Code, Open Lobby Status, Bot/PvP Toggle + Interactive POI Drop Selector */}
           <div className="lg:col-span-5 specular-panel backdrop-blur-2xl border border-white/10 rounded-2xl p-6 space-y-4 text-center">
             <div className="text-xs font-mono text-purple-400">
-              Bozz Battles Staging · Choose Drop Zone
+              Bozz Battles Lobby · No Countdown
             </div>
 
             <div className="py-3.5 px-4 bg-zinc-950 border border-emerald-400/35 rounded-2xl space-y-1">
-              <div className="text-[11px] font-mono text-zinc-400">Join Code</div>
+              <div className="text-[11px] font-mono text-zinc-400">Share Room Code</div>
               <div className="font-mono text-4xl font-black tracking-[0.28em] text-emerald-400 tabular-nums pl-[0.28em]">
                 {room.roomCode}
               </div>
@@ -1106,68 +1081,100 @@ function StudyBattleInner({
               compact
             />
 
-            <div className="p-3.5 bg-zinc-950/90 border border-purple-400/35 rounded-xl space-y-1">
-              <div className="inline-flex items-center gap-2 text-xs font-mono text-purple-300 font-bold">
-                <Clock className="h-4 w-4 text-emerald-400" />
-                <span>
-                  {lobbySecLeft > 0
-                    ? `Drop & Bot Backfill in ${lobbySecLeft}s`
-                    : "Backfilling AI Bots & Launching Arena..."}
-                </span>
+            <div className="p-3.5 bg-zinc-950/90 border border-emerald-400/30 rounded-xl space-y-1 text-left">
+              <div className="inline-flex items-center gap-2 text-xs font-mono text-emerald-300 font-bold">
+                <Users className="h-4 w-4 text-emerald-400" />
+                <span>Lobby Open · Waiting for Friends (No Timer)</span>
               </div>
-              <p className="text-[11px] text-zinc-400">
-                {slotsRemaining > 0
-                  ? `${slotsRemaining} slots backfill automatically with adaptive AI bots at 0s.`
-                  : "Full 20/20 human lobby ready!"}
+              <p className="text-[11px] text-zinc-400 leading-relaxed">
+                Friends can join with code <strong className="text-white">{room.roomCode}</strong> or the invite link anytime. Everyone in the Squad Roster drops into the exact same match when {isHost ? "you click Start Match" : `${room.hostName} launches`}.
               </p>
             </div>
 
             {isHost ? (
-              <div className="space-y-2">
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-2 p-1 bg-zinc-950 border border-white/10 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFillWithBots(true);
+                      setErrorMsg(null);
+                    }}
+                    className={`py-2 px-2.5 rounded-lg text-[11px] font-mono font-bold transition-colors cursor-pointer ${
+                      fillWithBots
+                        ? "bg-purple-500 text-white"
+                        : "text-zinc-400 hover:text-white"
+                    }`}
+                  >
+                    AI Bots Backfill (20)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFillWithBots(false);
+                      setErrorMsg(null);
+                    }}
+                    className={`py-2 px-2.5 rounded-lg text-[11px] font-mono font-bold transition-colors cursor-pointer ${
+                      !fillWithBots
+                        ? "bg-emerald-400 text-zinc-950"
+                        : "text-zinc-400 hover:text-white"
+                    }`}
+                  >
+                    Friends Only (No Bots)
+                  </button>
+                </div>
+
                 <button
                   type="button"
-                  disabled={isBusy}
-                  onClick={() => void handleDropNow()}
-                  className="w-full inline-flex items-center justify-center gap-2 py-3 px-5 bg-emerald-400 hover:bg-emerald-300 disabled:opacity-45 text-zinc-950 font-extrabold text-sm rounded-xl cursor-pointer transition-colors"
+                  disabled={isBusy || (!fillWithBots && players.length < 2)}
+                  onClick={() => void handleStartMatch()}
+                  className="w-full inline-flex items-center justify-center gap-2 py-3 px-5 bg-emerald-400 hover:bg-emerald-300 disabled:opacity-45 text-zinc-950 font-extrabold text-sm rounded-xl cursor-pointer disabled:cursor-not-allowed transition-colors"
                 >
                   <Play className="h-4 w-4" />
                   <span>
                     {isBusy
-                      ? "Deploying Arena..."
-                      : `Drop Now (Backfill ${slotsRemaining} Bots)`}
+                      ? "Launching Arena..."
+                      : fillWithBots
+                        ? `Start Match (${players.length} ${players.length === 1 ? "Player" : "Friends"} + ${slotsRemaining} Bots)`
+                        : players.length < 2
+                          ? `Waiting for Friend (${players.length}/2 min)`
+                          : `Start Friends Battle (${players.length} Players)`}
                   </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleExtendTimer()}
-                  className="w-full py-2 px-4 bg-zinc-900 hover:bg-zinc-800 border border-white/10 text-xs font-mono text-zinc-300 rounded-xl cursor-pointer"
-                >
-                  +15s Wait for Friends
                 </button>
               </div>
             ) : (
-              <div className="p-3 bg-purple-500/10 border border-purple-400/30 rounded-xl text-xs font-mono text-purple-200">
-                Locked in staging. Dropping automatically in {lobbySecLeft}s...
+              <div className="p-3.5 bg-purple-500/10 border border-purple-400/35 rounded-xl text-xs font-mono text-purple-200 space-y-1">
+                <div className="font-bold text-white">
+                  Ready in Room {room.roomCode} · Drop: {mySelectedPoiName}
+                </div>
+                <div className="text-[11px] text-purple-200/85">
+                  Waiting for {room.hostName} to start the battle. Your squad drops together!
+                </div>
               </div>
             )}
           </div>
 
-          {/* Right: 20-Player Human + AI Backfill Roster + Tactical Brief */}
+          {/* Right: Live Friends Roster + Tactical Brief */}
           <div className="lg:col-span-7 space-y-4">
             <div className="specular-panel backdrop-blur-2xl border border-white/10 rounded-2xl p-6 space-y-4">
-              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
                 <div className="flex items-center gap-2 text-white">
                   <Users className="h-4 w-4 text-emerald-400" />
                   <h2 className="text-sm font-bold">Squad Lobby Roster</h2>
                 </div>
                 <span className="text-xs font-mono text-emerald-400 tabular-nums">
-                  {players.length} Human + {slotsRemaining} AI Bots = 20 Total
+                  {isHost
+                    ? fillWithBots
+                      ? `${players.length} Joined + ${slotsRemaining} AI Bots = 20 Total`
+                      : `${players.length} Friends · PvP Only (No Bots)`
+                    : `${players.length} ${players.length === 1 ? "Player" : "Players"} Ready in Same Match`}
                 </span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 {players.map((p) => {
                   const tm = getTierMeta(p.tier);
+                  const poiLabel = getNearestPoiName(p.x, p.y);
                   return (
                     <div
                       key={p.playerId}
@@ -1182,8 +1189,8 @@ function StudyBattleInner({
                           {p.displayName}
                           {p.playerId === playerId ? " (You)" : ""}
                         </div>
-                        <div className="text-[11px] font-mono text-zinc-400">
-                          {p.isHost ? "Host" : "Human"} · {p.mmr} MMR
+                        <div className="text-[11px] font-mono text-zinc-400 truncate">
+                          {p.isHost ? "Host" : "Friend"} · Drop: {poiLabel}
                         </div>
                       </div>
                       <span
@@ -1235,7 +1242,7 @@ function StudyBattleInner({
 
   // ROOM SETUP HUB + PERSISTENT GBOZZ RANKS BANNER
   const activeProfile = profile || {
-    profileId: playerId,
+    profileId,
     displayName: hostName,
     mmr: 1000,
     peakMmr: 1000,
@@ -1261,7 +1268,7 @@ function StudyBattleInner({
       <div className="specular-panel backdrop-blur-2xl border border-white/10 rounded-2xl p-6 flex flex-wrap items-center justify-between gap-4">
         <div className="space-y-1">
           <div className="text-xs font-mono text-emerald-400">
-            Gbozz GPT · 2D Top-Down Battle Royale · 20 Players + Bot Backfill
+            Gbozz GPT · 2D Top-Down Battle Royale · Friends PvP &amp; Optional AI Bots
           </div>
           <h1 className="text-2xl font-extrabold text-white tracking-tight flex items-center gap-2.5">
             <Swords className="h-6 w-6 text-purple-400 shrink-0" />
@@ -1510,7 +1517,7 @@ function StudyBattleInner({
 
           <div className="flex flex-wrap items-center justify-between gap-4 pt-3 border-t border-white/10">
             <span className="text-xs font-mono text-zinc-400">
-              5 POIs · 3 Mini-Bozzes · 4-min 5-phase System Glitch Storm · 20-player backfill
+              5 POIs · 3 Mini-Bozzes · 4-min System Glitch Storm · No Lobby Timer
             </span>
 
             <div className="flex flex-wrap items-center gap-2.5">
@@ -1521,7 +1528,7 @@ function StudyBattleInner({
                 className="inline-flex items-center gap-2 px-5 py-3 bg-purple-500 hover:bg-purple-400 disabled:opacity-45 text-white font-extrabold text-xs sm:text-sm rounded-xl cursor-pointer disabled:cursor-not-allowed whitespace-nowrap shrink-0 transition-colors"
               >
                 <Play className="h-4 w-4" />
-                <span>{isBusy ? "Launching..." : "Instant Drop (vs 19 Bots)"}</span>
+                <span>{isBusy ? "Launching..." : "Solo Instant Drop (vs 19 Bots)"}</span>
               </button>
 
               <button
@@ -1530,7 +1537,7 @@ function StudyBattleInner({
                 className="inline-flex items-center gap-2 px-6 py-3 bg-emerald-400 hover:bg-emerald-300 disabled:opacity-45 text-zinc-950 font-extrabold text-xs sm:text-sm rounded-xl cursor-pointer disabled:cursor-not-allowed whitespace-nowrap shrink-0 transition-colors"
               >
                 <PlusCircle className="h-4 w-4" />
-                <span>{isBusy ? "Deploying Room..." : "Create Room"}</span>
+                <span>{isBusy ? "Creating Room..." : "Create Room (Wait for Friends)"}</span>
               </button>
             </div>
           </div>
