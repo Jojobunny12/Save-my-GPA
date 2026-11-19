@@ -41,6 +41,10 @@ export interface QuizQuestion {
   explanation: string;
   unitTag?: string;
   tier?: AssessmentTier;
+  timeSeconds?: number;
+  timeReason?: string;
+  memoryHook?: string;
+  learningMethod?: string;
 }
 
 export interface ConceptNode {

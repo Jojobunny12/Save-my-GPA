@@ -259,6 +259,20 @@ interface NormalizedQuizItem {
   explanation: string;
   unitTag?: string;
   tier?: AssessmentTierValue;
+  timeSeconds?: number;
+  timeReason?: string;
+  memoryHook?: string;
+  learningMethod?: string;
+}
+
+function estimateFallbackQuestionSeconds(question: string, tier?: AssessmentTierValue): number {
+  const words = question.trim().split(/\s+/).length;
+  const hasMathOrCode = /[=+\-*/^√∫Σ{}()[\]<>]|sin|cos|tan|log|for\s*\(|if\s*\(/i.test(question);
+  let base = tier === "ap_stimulus" ? 26 : tier === "why_how" ? 20 : 14;
+  if (words > 24) base += 6;
+  else if (words > 14) base += 3;
+  if (hasMathOrCode) base += 5;
+  return Math.min(45, Math.max(10, base));
 }
 
 function normalizeQuizItems(rawQuiz: any[], targetCount = 25): NormalizedQuizItem[] {
@@ -290,6 +304,12 @@ function normalizeQuizItems(rawQuiz: any[], targetCount = 25): NormalizedQuizIte
 
     const rawIdx = Number(item?.correctIndex);
     const correctIndex = Number.isInteger(rawIdx) && rawIdx >= 0 && rawIdx < 4 ? rawIdx : 0;
+    const tier = normalizeTier(item?.tier, cleaned.length);
+    const rawSec = Number(item?.timeSeconds);
+    const timeSeconds =
+      Number.isFinite(rawSec) && rawSec >= 8 && rawSec <= 60
+        ? Math.round(rawSec)
+        : estimateFallbackQuestionSeconds(qText, tier);
 
     cleaned.push({
       question: qText,
@@ -297,7 +317,28 @@ function normalizeQuizItems(rawQuiz: any[], targetCount = 25): NormalizedQuizIte
       correctIndex,
       explanation: expText || "Review the corresponding unit principle and verify your work step by step.",
       unitTag: typeof item?.unitTag === "string" && item.unitTag.trim() ? item.unitTag.trim() : undefined,
-      tier: normalizeTier(item?.tier, cleaned.length),
+      tier,
+      timeSeconds,
+      timeReason:
+        typeof item?.timeReason === "string" && item.timeReason.trim()
+          ? item.timeReason.trim().slice(0, 60)
+          : tier === "ap_stimulus"
+          ? "Multi-step reasoning"
+          : tier === "why_how"
+          ? "Conceptual analysis"
+          : "Rapid recall",
+      memoryHook:
+        typeof item?.memoryHook === "string" && item.memoryHook.trim()
+          ? item.memoryHook.trim().slice(0, 180)
+          : undefined,
+      learningMethod:
+        typeof item?.learningMethod === "string" && item.learningMethod.trim()
+          ? item.learningMethod.trim().slice(0, 40)
+          : tier === "ap_stimulus"
+          ? "Deep Trace"
+          : tier === "why_how"
+          ? "Feynman Trap"
+          : "Active Recall",
     });
 
     if (cleaned.length >= targetCount) break;
@@ -670,11 +711,12 @@ MOCK EXAM REQUIREMENTS (EXACTLY 25 questions):
 - Write authentic, challenging, textbook-accurate questions with realistic numbers, equations, historical arguments, literary excerpts, language conjugations, or code snippets.
 - MATCHING POOL UNIQUENESS CONSTRAINT: Questions are grouped into sets of 10 (Q1-Q10, Q11-Q20, Q21-Q25) where students match questions to correct answer cards. Within each set of 10 questions (1-10, 11-20, 21-25), ALL 10 correct answer choices MUST be completely distinct values/phrases (never allow two questions in the same 10-question set to have identical correct answer strings like both having "1", "0", or "True").
 - Provide 4 distinct options formatted strictly as ["A) ...", "B) ...", "C) ...", "D) ..."], with correctIndex in 0..3 and 1 crisp, direct sentence explaining the solution.
+- Also estimate "timeSeconds" (10 to 45 integer: 10-14 for instant recall, 18-25 for why/how or 1-step math, 28-45 for multi-step calculations/code/stimulus), a 1-sentence "memoryHook" (mnemonic/pattern shortcut to memorize it fast), and "learningMethod" ("Active Recall" | "Feynman Trap" | "Mnemonic Hook" | "Pattern Contrast" | "Deep Trace").
 
 FORMULA, JSON & CONCISENESS RULES:
 - Use clean, readable plain Unicode math (e.g., "sin²(θ) + cos²(θ) = 1", "log₂(64) = 6", "√(b² - 4ac)", "π/6", "ΔH < 0", "x̅", "p̂"). NEVER use raw LaTeX ($...$, $$...$$, \\frac, \\sqrt, \\bar).
 - Keep the tone focused, sharp, and academic—no slang, memes, or filler jokes.
-- CONCISENESS & VALID JSON: Keep coreCheatSheetMarkdown <= 450 words, each flashcard answer <= 35 words, each quiz option <= 14 words, and each quiz explanation <= 22 words. Always escape newlines inside JSON strings as \\n and never emit unescaped quotes or truncated JSON.
+- CONCISENESS & VALID JSON: Keep coreCheatSheetMarkdown <= 450 words, each flashcard answer <= 35 words, each quiz option <= 14 words, each quiz explanation <= 22 words, and each memoryHook <= 18 words. Always escape newlines inside JSON strings as \\n and never emit unescaped quotes or truncated JSON.
 
 Student Context: ${additionalNotes || "Cumulative semester final review"}
 
@@ -682,7 +724,7 @@ Return ONLY valid JSON matching the schema with:
 - summary: { title, curriculumExplanation, topTipsForFinal (4 subject-specific tactics), synthesizedNotesParagraph, coreCheatSheetMarkdown (dense unit-by-unit formulas/theorems/dates cheat sheet) }
 - timeline: 5 concise days mapped directly to the selected units
 - flashcards: 14 to 16 predictive D'Evelyn exam flashcards (each with question, answer, unitTag, tier)
-- quiz: EXACTLY 25 unique cumulative multiple-choice questions (each with question, options, correctIndex, explanation, unitTag, tier)`;
+- quiz: EXACTLY 25 unique cumulative multiple-choice questions (each with question, options, correctIndex, explanation, unitTag, tier, timeSeconds, memoryHook, learningMethod)`;
 
     const contents: any[] = [];
     const textAttachments: string[] = [];
@@ -803,6 +845,9 @@ Return ONLY valid JSON matching the schema with:
                       explanation: { type: Type.STRING },
                       unitTag: { type: Type.STRING },
                       tier: { type: Type.STRING },
+                      timeSeconds: { type: Type.INTEGER },
+                      memoryHook: { type: Type.STRING },
+                      learningMethod: { type: Type.STRING },
                     },
                   },
                 },
@@ -1339,6 +1384,109 @@ Generate the Dual-Coding Concept Graph JSON.`;
     res.json(graphData);
   } catch (err: any) {
     console.error("Live AI concept map generation failed:", err);
+    const { status, message } = extractErrorStatusAndMessage(err);
+    res.status(status).json({ error: message });
+  }
+});
+
+// REST API endpoint: AI Adaptive Timer & Memory-Hook Calibrator for Study Battle
+app.post("/api/calibrate-battle-questions", async (req, res) => {
+  try {
+    const { questions, title } = req.body || {};
+    if (!Array.isArray(questions) || questions.length === 0) {
+      res.status(400).json({ error: "Provide a non-empty questions array to calibrate." });
+      return;
+    }
+
+    const capped = questions.slice(0, 50);
+    const formatted = capped
+      .map(
+        (q: any, idx: number) =>
+          `#${idx}: ${String(q?.question || "").slice(0, 320)} | Options: ${(Array.isArray(q?.options) ? q.options : []).slice(0, 4).join(" / ")} | AnswerIdx: ${Number(q?.correctIndex ?? 0)}`
+      )
+      .join("\n");
+
+    const systemInstruction = `You are a cognitive scientist calibrating live Study Battle quiz questions for "${String(title || "Academic Study Battle")}".
+For each question index, estimate:
+1. "timeSeconds": exact integer seconds (between 10 and 45) a well-prepared student truly needs based on reading load, math/code tracing steps, and cognitive difficulty:
+   - 10–14s: fast definition / direct formula recall
+   - 16–24s: conceptual why/how discrimination or 1-step calculation
+   - 26–45s: multi-step math, code execution trace, or dense reading/trap analysis
+2. "timeReason": crisp 3-5 word justification (e.g. "Multi-step trig trace", "Fast formula recall").
+3. "memoryHook": vivid 1-sentence mnemonic, pattern shortcut, or anti-trap memory cue (<= 18 words) that locks the concept into long-term memory without simply stating "Option A is right".
+4. "learningMethod": one of "Active Recall", "Feynman Trap", "Mnemonic Hook", "Pattern Contrast", "Deep Trace".`;
+
+    const calibrated = await executeGeminiWithRetry(async (aiInstance, entry, attemptLabel) => {
+      const response = await withTimeout(
+        aiInstance.models.generateContent({
+          model: entry.model,
+          contents: `Calibrate these ${capped.length} Study Battle questions:\n${formatted}`,
+          config: {
+            systemInstruction,
+            thinkingConfig: { thinkingLevel: entry.thinkingLevel },
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              required: ["items"],
+              properties: {
+                items: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    required: ["index", "timeSeconds", "timeReason", "memoryHook", "learningMethod"],
+                    properties: {
+                      index: { type: Type.INTEGER },
+                      timeSeconds: { type: Type.INTEGER },
+                      timeReason: { type: Type.STRING },
+                      memoryHook: { type: Type.STRING },
+                      learningMethod: { type: Type.STRING },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        }),
+        entry.totalTimeoutMs,
+        `${attemptLabel}:calibrate-battle`
+      );
+
+      const text = response.text;
+      if (!text) throw new Error("Empty calibration response from Gemini.");
+      const parsed = parseGeminiJson(text);
+      const itemMap = new Map<number, any>();
+      if (Array.isArray(parsed?.items)) {
+        for (const item of parsed.items) {
+          itemMap.set(Number(item?.index), item);
+        }
+      }
+
+      return capped.map((q: any, idx: number) => {
+        const match = itemMap.get(idx);
+        const sec = Number(match?.timeSeconds);
+        const validSec = Number.isFinite(sec) ? Math.min(45, Math.max(10, Math.round(sec))) : estimateFallbackQuestionSeconds(String(q?.question || ""));
+        return {
+          ...q,
+          timeSeconds: validSec,
+          timeReason:
+            typeof match?.timeReason === "string" && match.timeReason.trim()
+              ? match.timeReason.trim().slice(0, 60)
+              : "AI cognitive pacing",
+          memoryHook:
+            typeof match?.memoryHook === "string" && match.memoryHook.trim()
+              ? match.memoryHook.trim().slice(0, 180)
+              : q.memoryHook || q.explanation || "",
+          learningMethod:
+            typeof match?.learningMethod === "string" && match.learningMethod.trim()
+              ? match.learningMethod.trim().slice(0, 40)
+              : "Active Recall",
+        };
+      });
+    });
+
+    res.json({ questions: calibrated });
+  } catch (err: any) {
+    console.error("Live AI Study Battle calibration failed:", err);
     const { status, message } = extractErrorStatusAndMessage(err);
     res.status(status).json({ error: message });
   }

@@ -9,16 +9,37 @@ import {
   updateDoc,
   writeBatch,
 } from "firebase/firestore";
+import {
+  ARENA_SIZE,
+  LOBBY_COUNTDOWN_SEC,
+  TARGET_LOBBY_SIZE,
+  computeMatchMmrDelta,
+  generateArenaLayout,
+  generateBackfillBots,
+  generateMiniBozzes,
+  getPoiSpawnPosition,
+  getSafeSpawnPosition,
+  getTierFromMmr,
+  normalizeTierName,
+} from "./arenaEngine";
 import { OperationType, handleFirestoreError } from "./firebaseConfig";
 import {
-  StudyAnswerDocument,
+  BattleProfileDocument,
+  BotState,
+  CompetitiveTier,
+  FirewallWall,
+  MatchResultSummary,
+  MiniBozzState,
+  PoiId,
   StudyBattleQuestion,
   StudyPlayerDocument,
   StudyRoomDocument,
+  StudyWorldStateDocument,
+  SyncedCrateState,
 } from "./types";
 
-export const QUESTION_DURATION_SECONDS = 15;
-const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ"; // Avoid ambiguous O/I? Or include all A-Z; valid ^[A-Z]{4}$
+const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+const LOCAL_PROFILE_STORAGE_KEY = "bozz_battle_royale_profile_v1";
 
 export function sanitizeId(raw: string): string {
   return raw.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48);
@@ -49,7 +70,7 @@ export function parseStudyQuestionsJson(rawInput: string): {
 } {
   const trimmed = rawInput.trim();
   if (!trimmed) {
-    return { questions: [], error: "Paste a JSON array of questions to host a room." };
+    return { questions: [], error: "Paste a JSON array of questions to host Bozz Battles." };
   }
 
   let parsed: unknown;
@@ -72,7 +93,7 @@ export function parseStudyQuestionsJson(rawInput: string): {
   if (parsed.length > 50) {
     return {
       questions: [],
-      error: "Maximum 50 questions per Study Battle room.",
+      error: "Maximum 50 questions per Bozz Battles room.",
     };
   }
 
@@ -120,10 +141,233 @@ export function parseStudyQuestionsJson(rawInput: string): {
     if (typeof item.unitTag === "string" && item.unitTag.trim()) {
       qObj.unitTag = item.unitTag.trim().slice(0, 80);
     }
+    if (typeof item.memoryHook === "string" && item.memoryHook.trim()) {
+      qObj.memoryHook = item.memoryHook.trim().slice(0, 200);
+    }
+    if (typeof item.learningMethod === "string" && item.learningMethod.trim()) {
+      qObj.learningMethod = item.learningMethod.trim().slice(0, 40);
+    }
     normalized.push(qObj);
   }
 
   return { questions: normalized, error: null };
+}
+
+export async function calibrateStudyQuestionsWithAI(
+  questions: StudyBattleQuestion[],
+  title: string
+): Promise<StudyBattleQuestion[]> {
+  const response = await fetch("/api/calibrate-battle-questions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ questions, title }),
+  });
+
+  if (!response.ok) {
+    let errText = `AI question enrichment failed (HTTP ${response.status}).`;
+    try {
+      const errBody = await response.json();
+      if (errBody?.error) errText = errBody.error;
+    } catch {
+      // Keep default status text
+    }
+    throw new Error(errText);
+  }
+
+  const data = await response.json();
+  if (!Array.isArray(data?.questions) || data.questions.length === 0) {
+    throw new Error("AI enrichment returned an invalid question list.");
+  }
+  return data.questions as StudyBattleQuestion[];
+}
+
+function defaultProfile(profileId: string, displayName: string): BattleProfileDocument {
+  return {
+    profileId,
+    displayName: displayName.trim().slice(0, 24) || "Scholar",
+    mmr: 1000,
+    peakMmr: 1000,
+    tier: "Silver",
+    matchesPlayed: 0,
+    wins: 0,
+    totalKills: 0,
+    questionsCorrect: 0,
+    questionsAttempted: 0,
+  };
+}
+
+function readLocalProfile(profileId: string): BattleProfileDocument | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(LOCAL_PROFILE_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as BattleProfileDocument;
+    if (parsed && parsed.profileId === profileId && typeof parsed.mmr === "number") {
+      return {
+        ...parsed,
+        tier: normalizeTierName(parsed.tier),
+      };
+    }
+  } catch {
+    // Ignore localStorage read errors
+  }
+  return null;
+}
+
+function writeLocalProfile(profile: BattleProfileDocument): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(LOCAL_PROFILE_STORAGE_KEY, JSON.stringify(profile));
+  } catch {
+    // Ignore localStorage quota errors
+  }
+}
+
+export async function loadOrCreateBattleProfile(
+  db: Firestore,
+  profileId: string,
+  displayName: string
+): Promise<BattleProfileDocument> {
+  const path = `battleProfiles/${profileId}`;
+  const cleanName = displayName.trim().slice(0, 24) || "Scholar";
+  let snap;
+  try {
+    snap = await getDoc(doc(db, "battleProfiles", profileId));
+  } catch (err) {
+    const local = readLocalProfile(profileId);
+    if (local) return local;
+    handleFirestoreError(err, OperationType.GET, path);
+  }
+
+  if (snap.exists()) {
+    const raw = snap.data() as BattleProfileDocument;
+    const data: BattleProfileDocument = {
+      ...raw,
+      tier: normalizeTierName(raw.tier),
+    };
+    writeLocalProfile(data);
+    return data;
+  }
+
+  const initial = defaultProfile(profileId, cleanName);
+  const payload: BattleProfileDocument = {
+    ...initial,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  try {
+    await setDoc(doc(db, "battleProfiles", profileId), payload);
+  } catch (err) {
+    writeLocalProfile(initial);
+    handleFirestoreError(err, OperationType.CREATE, path);
+  }
+
+  writeLocalProfile(initial);
+  return initial;
+}
+
+export async function recordMatchRankResult(params: {
+  db: Firestore;
+  profileId: string;
+  displayName: string;
+  placement: number;
+  totalPlayers: number;
+  kills: number;
+  miniBozzKills?: number;
+  medallionSecured?: boolean;
+  questionsCorrect: number;
+  questionsAttempted: number;
+  winnerName: string;
+}): Promise<{ profile: BattleProfileDocument; summary: MatchResultSummary }> {
+  const {
+    db,
+    profileId,
+    displayName,
+    placement,
+    totalPlayers,
+    kills,
+    miniBozzKills = 0,
+    medallionSecured = false,
+    questionsCorrect,
+    questionsAttempted,
+    winnerName,
+  } = params;
+
+  const existing = await loadOrCreateBattleProfile(db, profileId, displayName);
+  const prevTier = normalizeTierName(existing.tier);
+  const { mmrDelta, newMmr, newTier } = computeMatchMmrDelta({
+    placement,
+    totalPlayers,
+    kills,
+    miniBozzKills,
+    questionsCorrect,
+    questionsAttempted,
+    currentMmr: existing.mmr,
+  });
+
+  const cleanName = displayName.trim().slice(0, 24) || existing.displayName;
+  const nextProfile: BattleProfileDocument = {
+    profileId,
+    displayName: cleanName,
+    mmr: newMmr,
+    peakMmr: Math.max(existing.peakMmr, newMmr),
+    tier: newTier,
+    matchesPlayed: existing.matchesPlayed + 1,
+    wins: existing.wins + (placement === 1 ? 1 : 0),
+    totalKills: existing.totalKills + Math.max(0, kills),
+    questionsCorrect: existing.questionsCorrect + Math.max(0, questionsCorrect),
+    questionsAttempted: existing.questionsAttempted + Math.max(0, questionsAttempted),
+  };
+
+  const path = `battleProfiles/${profileId}`;
+  const profileRef = doc(db, "battleProfiles", profileId);
+  try {
+    const existingSnap = await getDoc(profileRef);
+    if (existingSnap.exists()) {
+      await updateDoc(profileRef, {
+        displayName: nextProfile.displayName,
+        mmr: nextProfile.mmr,
+        peakMmr: nextProfile.peakMmr,
+        tier: nextProfile.tier,
+        matchesPlayed: nextProfile.matchesPlayed,
+        wins: nextProfile.wins,
+        totalKills: nextProfile.totalKills,
+        questionsCorrect: nextProfile.questionsCorrect,
+        questionsAttempted: nextProfile.questionsAttempted,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(profileRef, {
+        ...nextProfile,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+
+  writeLocalProfile(nextProfile);
+
+  return {
+    profile: nextProfile,
+    summary: {
+      placement,
+      totalPlayers,
+      kills,
+      miniBozzKills,
+      medallionSecured,
+      questionsCorrect,
+      questionsAttempted,
+      previousMmr: existing.mmr,
+      newMmr,
+      mmrDelta,
+      previousTier: prevTier,
+      newTier,
+      winnerName,
+    },
+  };
 }
 
 function randomRoomCode(): string {
@@ -150,73 +394,125 @@ export async function generateUniqueRoomCode(db: Firestore): Promise<string> {
   return randomRoomCode();
 }
 
-export async function createStudyRoom(params: {
+export async function createBattleRoom(params: {
   db: Firestore;
   hostId: string;
   hostName: string;
   title: string;
   questions: StudyBattleQuestion[];
-  joinHostAsPlayer: boolean;
   hostPlayerId: string;
+  hostMmr: number;
+  hostTier: CompetitiveTier;
+  dropPoiId?: PoiId;
 }): Promise<string> {
-  const { db, hostId, hostName, title, questions, joinHostAsPlayer, hostPlayerId } = params;
+  const { db, hostId, hostName, title, questions, hostPlayerId, hostMmr, hostTier, dropPoiId } =
+    params;
   const roomCode = await generateUniqueRoomCode(db);
-  const roomPath = `studyRooms/${roomCode}`;
+  const arenaSeed = Math.floor(10000 + Math.random() * 890000);
+  const layout = generateArenaLayout(arenaSeed);
+  const spawn = dropPoiId
+    ? getPoiSpawnPosition(
+        dropPoiId,
+        layout.obstacles,
+        arenaSeed,
+        layout.riverPoints,
+        layout.bridges
+      )
+    : getSafeSpawnPosition(
+        0,
+        TARGET_LOBBY_SIZE,
+        layout.obstacles,
+        arenaSeed,
+        layout.riverPoints,
+        layout.bridges
+      );
 
-  const cleanHostName = hostName.trim().slice(0, 32) || "Host";
-  const cleanTitle = title.trim().slice(0, 120) || "Bozz GPT Study Battle";
+  const cleanHostName = hostName.trim().slice(0, 24) || "Host";
+  const cleanTitle = title.trim().slice(0, 120) || "Bozz Battles Royale";
 
-  const payload: StudyRoomDocument = {
+  const roomPayload: StudyRoomDocument = {
     roomCode,
     hostId,
     hostName: cleanHostName,
     title: cleanTitle,
     status: "lobby",
-    currentQuestionIndex: 0,
-    questionStartedAtMs: 0,
-    questionDurationSec: QUESTION_DURATION_SECONDS,
-    answersLocked: false,
+    targetPlayers: TARGET_LOBBY_SIZE,
+    countdownEndsAtMs: Date.now() + LOBBY_COUNTDOWN_SEC * 1000,
+    matchStartedAtMs: 0,
+    arenaSeed,
     questions,
+    winnerId: "",
+    winnerName: "",
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
 
+  const playerPayload: StudyPlayerDocument = {
+    playerId: hostPlayerId,
+    displayName: cleanHostName,
+    mmr: Math.max(0, Math.min(5000, Math.round(hostMmr))),
+    tier: normalizeTierName(hostTier),
+    isHost: true,
+    alive: true,
+    hp: 100,
+    shield: 0,
+    ammo: 0,
+    kills: 0,
+    hasMedallion: false,
+    questionsCorrect: 0,
+    questionsAttempted: 0,
+    x: Math.round(spawn.x),
+    y: Math.round(spawn.y),
+    aimAngle: 0,
+    exposedUntilMs: 0,
+    placement: 0,
+    lastShotId: "",
+    lastShotX: 0,
+    lastShotY: 0,
+    lastShotVx: 0,
+    lastShotVy: 0,
+    lastShotAtMs: 0,
+    joinedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
   try {
-    await setDoc(doc(db, "studyRooms", roomCode), payload);
+    await setDoc(doc(db, "studyRooms", roomCode), roomPayload);
   } catch (err) {
-    handleFirestoreError(err, OperationType.CREATE, roomPath);
+    handleFirestoreError(err, OperationType.CREATE, `studyRooms/${roomCode}`);
   }
 
-  if (joinHostAsPlayer) {
-    const playerPath = `studyRooms/${roomCode}/players/${hostPlayerId}`;
-    const playerPayload: StudyPlayerDocument = {
-      playerId: hostPlayerId,
-      displayName: cleanHostName.slice(0, 24),
-      score: 0,
-      streak: 0,
-      lastPointsEarned: 0,
-      lastAnswerCorrect: false,
-      isHost: true,
-      joinedAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    };
-    try {
-      await setDoc(doc(db, "studyRooms", roomCode, "players", hostPlayerId), playerPayload);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, playerPath);
-    }
+  const miniBozzes = generateMiniBozzes(layout.obstacles);
+  const subBatch = writeBatch(db);
+  subBatch.set(doc(db, "studyRooms", roomCode, "players", hostPlayerId), playerPayload);
+  subBatch.set(doc(db, "studyRooms", roomCode, "world", "state"), {
+    bots: [],
+    miniBozzes,
+    firewalls: [],
+    crateStates: [],
+    killFeed: [],
+    updatedAt: serverTimestamp(),
+  } satisfies StudyWorldStateDocument);
+
+  try {
+    await subBatch.commit();
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `studyRooms/${roomCode}/players/${hostPlayerId}`);
   }
 
   return roomCode;
 }
 
-export async function joinStudyRoom(params: {
+export async function joinBattleRoom(params: {
   db: Firestore;
   roomCode: string;
   playerId: string;
   displayName: string;
+  mmr: number;
+  tier: CompetitiveTier;
+  dropPoiId?: PoiId;
 }): Promise<StudyRoomDocument> {
-  const { db } = params;
+  const { db, playerId, displayName, mmr, tier, dropPoiId } = params;
   const code = params.roomCode.trim().toUpperCase();
   if (!/^[A-Z]{4}$/.test(code)) {
     throw new Error("Room code must be exactly 4 letters (e.g. BOZZ).");
@@ -231,12 +527,12 @@ export async function joinStudyRoom(params: {
   }
 
   if (!roomSnap.exists()) {
-    throw new Error(`No active Study Battle room found for code "${code}".`);
+    throw new Error(`No Bozz Battles room found for code "${code}".`);
   }
 
   const roomData = roomSnap.data() as StudyRoomDocument;
-  const playerRef = doc(db, "studyRooms", code, "players", params.playerId);
-  const playerPath = `studyRooms/${code}/players/${params.playerId}`;
+  const playerRef = doc(db, "studyRooms", code, "players", playerId);
+  const playerPath = `studyRooms/${code}/players/${playerId}`;
 
   let existingPlayer;
   try {
@@ -250,22 +546,58 @@ export async function joinStudyRoom(params: {
   }
 
   if (roomData.status !== "lobby") {
-    throw new Error(`Room ${code} is already in progress (${roomData.status}). Wait for the next battle!`);
+    throw new Error(`Match ${code} has already launched (${roomData.status}).`);
   }
 
-  const cleanName = params.displayName.trim().slice(0, 24);
+  const cleanName = displayName.trim().slice(0, 24);
   if (!cleanName) {
-    throw new Error("Enter a display name before joining.");
+    throw new Error("Enter your display name before dropping in.");
   }
+
+  const layout = generateArenaLayout(roomData.arenaSeed);
+  const randIndex = Math.floor(Math.random() * (roomData.targetPlayers - 1)) + 1;
+  const spawn = dropPoiId
+    ? getPoiSpawnPosition(
+        dropPoiId,
+        layout.obstacles,
+        roomData.arenaSeed,
+        layout.riverPoints,
+        layout.bridges
+      )
+    : getSafeSpawnPosition(
+        randIndex,
+        roomData.targetPlayers,
+        layout.obstacles,
+        roomData.arenaSeed,
+        layout.riverPoints,
+        layout.bridges
+      );
 
   const playerPayload: StudyPlayerDocument = {
-    playerId: params.playerId,
+    playerId,
     displayName: cleanName,
-    score: 0,
-    streak: 0,
-    lastPointsEarned: 0,
-    lastAnswerCorrect: false,
+    mmr: Math.max(0, Math.min(5000, Math.round(mmr))),
+    tier: normalizeTierName(tier),
     isHost: false,
+    alive: true,
+    hp: 100,
+    shield: 0,
+    ammo: 0,
+    kills: 0,
+    hasMedallion: false,
+    questionsCorrect: 0,
+    questionsAttempted: 0,
+    x: Math.round(spawn.x),
+    y: Math.round(spawn.y),
+    aimAngle: 0,
+    exposedUntilMs: 0,
+    placement: 0,
+    lastShotId: "",
+    lastShotX: 0,
+    lastShotY: 0,
+    lastShotVx: 0,
+    lastShotVy: 0,
+    lastShotAtMs: 0,
     joinedAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
@@ -279,19 +611,48 @@ export async function joinStudyRoom(params: {
   return roomData;
 }
 
-export function subscribeToRoom(
+export async function updatePlayerDropPoi(params: {
+  db: Firestore;
+  roomCode: string;
+  playerId: string;
+  arenaSeed: number;
+  poiId: PoiId;
+}): Promise<{ x: number; y: number }> {
+  const { db, roomCode, playerId, arenaSeed, poiId } = params;
+  const layout = generateArenaLayout(arenaSeed);
+  const pos = getPoiSpawnPosition(
+    poiId,
+    layout.obstacles,
+    arenaSeed,
+    layout.riverPoints,
+    layout.bridges
+  );
+  const path = `studyRooms/${roomCode}/players/${playerId}`;
+  try {
+    await updateDoc(doc(db, "studyRooms", roomCode, "players", playerId), {
+      x: Math.round(pos.x),
+      y: Math.round(pos.y),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+  return pos;
+}
+
+export function subscribeToBattleRoom(
   db: Firestore,
   roomCode: string,
   callbacks: {
     onRoom: (room: StudyRoomDocument | null) => void;
     onPlayers: (players: StudyPlayerDocument[]) => void;
-    onAnswers: (answers: StudyAnswerDocument[]) => void;
+    onWorld: (world: StudyWorldStateDocument | null) => void;
     onError: (err: Error) => void;
   }
 ): () => void {
   const roomPath = `studyRooms/${roomCode}`;
   const playersPath = `studyRooms/${roomCode}/players`;
-  const answersPath = `studyRooms/${roomCode}/answers`;
+  const worldPath = `studyRooms/${roomCode}/world/state`;
 
   const unsubRoom = onSnapshot(
     doc(db, "studyRooms", roomCode),
@@ -311,8 +672,19 @@ export function subscribeToRoom(
     collection(db, "studyRooms", roomCode, "players"),
     (snap) => {
       const list = snap.docs
-        .map((d) => d.data() as StudyPlayerDocument)
-        .sort((a, b) => b.score - a.score || a.displayName.localeCompare(b.displayName));
+        .map((d) => {
+          const data = d.data() as StudyPlayerDocument;
+          return {
+            ...data,
+            tier: normalizeTierName(data.tier),
+            hasMedallion: Boolean(data.hasMedallion),
+          };
+        })
+        .sort(
+          (a, b) =>
+            Number(b.isHost) - Number(a.isHost) ||
+            a.displayName.localeCompare(b.displayName)
+        );
       callbacks.onPlayers(list);
     },
     (err) => {
@@ -324,15 +696,14 @@ export function subscribeToRoom(
     }
   );
 
-  const unsubAnswers = onSnapshot(
-    collection(db, "studyRooms", roomCode, "answers"),
+  const unsubWorld = onSnapshot(
+    doc(db, "studyRooms", roomCode, "world", "state"),
     (snap) => {
-      const list = snap.docs.map((d) => d.data() as StudyAnswerDocument);
-      callbacks.onAnswers(list);
+      callbacks.onWorld(snap.exists() ? (snap.data() as StudyWorldStateDocument) : null);
     },
     (err) => {
       try {
-        handleFirestoreError(err, OperationType.LIST, answersPath);
+        handleFirestoreError(err, OperationType.GET, worldPath);
       } catch (wrapped) {
         callbacks.onError(wrapped as Error);
       }
@@ -342,44 +713,18 @@ export function subscribeToRoom(
   return () => {
     unsubRoom();
     unsubPlayers();
-    unsubAnswers();
+    unsubWorld();
   };
 }
 
-export async function submitPlayerAnswer(params: {
-  db: Firestore;
-  roomCode: string;
-  playerId: string;
-  questionIndex: number;
-  selectedIndex: number;
-}): Promise<void> {
-  const { db, roomCode, playerId, questionIndex, selectedIndex } = params;
-  const answerId = `${questionIndex}_${playerId}`;
-  const path = `studyRooms/${roomCode}/answers/${answerId}`;
-
-  const payload: StudyAnswerDocument = {
-    playerId,
-    questionIndex,
-    selectedIndex,
-    answeredAtMs: Date.now(),
-    createdAt: serverTimestamp(),
-  };
-
-  try {
-    await setDoc(doc(db, "studyRooms", roomCode, "answers", answerId), payload);
-  } catch (err) {
-    handleFirestoreError(err, OperationType.CREATE, path);
-  }
-}
-
-export async function hostStartGame(db: Firestore, roomCode: string): Promise<void> {
+export async function hostExtendLobbyCountdown(
+  db: Firestore,
+  roomCode: string
+): Promise<void> {
   const path = `studyRooms/${roomCode}`;
   try {
     await updateDoc(doc(db, "studyRooms", roomCode), {
-      status: "question",
-      currentQuestionIndex: 0,
-      questionStartedAtMs: Date.now(),
-      answersLocked: false,
+      countdownEndsAtMs: Date.now() + LOBBY_COUNTDOWN_SEC * 1000,
       updatedAt: serverTimestamp(),
     });
   } catch (err) {
@@ -387,62 +732,42 @@ export async function hostStartGame(db: Firestore, roomCode: string): Promise<vo
   }
 }
 
-export function computeQuestionPoints(
-  isCorrect: boolean,
-  elapsedMs: number,
-  durationSec: number
-): number {
-  if (!isCorrect) return 0;
-  const totalMs = Math.max(1000, durationSec * 1000);
-  const clampedElapsed = Math.max(0, Math.min(totalMs, elapsedMs));
-  const speedRatio = 1 - clampedElapsed / totalMs;
-  const pts = Math.round(500 + 500 * speedRatio);
-  return Math.max(500, Math.min(1000, pts));
-}
-
-export async function hostLockAndScoreRound(params: {
+export async function hostLaunchRoyaleMatch(params: {
   db: Firestore;
   room: StudyRoomDocument;
   players: StudyPlayerDocument[];
-  answers: StudyAnswerDocument[];
 }): Promise<void> {
-  const { db, room, players, answers } = params;
-  const currentQ = room.questions[room.currentQuestionIndex];
-  if (!currentQ) return;
+  const { db, room, players } = params;
+  if (room.status !== "lobby") return;
 
-  const roundAnswers = new Map<string, StudyAnswerDocument>();
-  for (const ans of answers) {
-    if (ans.questionIndex === room.currentQuestionIndex) {
-      roundAnswers.set(ans.playerId, ans);
-    }
-  }
+  const layout = generateArenaLayout(room.arenaSeed);
+  const bots = generateBackfillBots({
+    existingHumanCount: players.length,
+    targetPlayers: room.targetPlayers || TARGET_LOBBY_SIZE,
+    arenaSeed: room.arenaSeed,
+    obstacles: layout.obstacles,
+    riverPoints: layout.riverPoints,
+    bridges: layout.bridges,
+  });
+  const miniBozzes = generateMiniBozzes(layout.obstacles);
 
   const batch = writeBatch(db);
-  const roomRef = doc(db, "studyRooms", room.roomCode);
+  batch.set(doc(db, "studyRooms", room.roomCode, "world", "state"), {
+    bots,
+    miniBozzes,
+    firewalls: [],
+    crateStates: [],
+    killFeed: [
+      `Drop live · ${players.length} human + ${bots.length} bots · ${miniBozzes.length} Mini-Bozzes`,
+    ],
+    updatedAt: serverTimestamp(),
+  } satisfies StudyWorldStateDocument);
 
-  batch.update(roomRef, {
-    status: "leaderboard",
-    answersLocked: true,
+  batch.update(doc(db, "studyRooms", room.roomCode), {
+    status: "active",
+    matchStartedAtMs: Date.now(),
     updatedAt: serverTimestamp(),
   });
-
-  for (const player of players) {
-    const ans = roundAnswers.get(player.playerId);
-    const isCorrect = Boolean(ans && ans.selectedIndex === currentQ.correctIndex);
-    const elapsedMs = ans
-      ? Math.max(0, ans.answeredAtMs - room.questionStartedAtMs)
-      : room.questionDurationSec * 1000;
-    const pointsEarned = computeQuestionPoints(isCorrect, elapsedMs, room.questionDurationSec);
-
-    const playerRef = doc(db, "studyRooms", room.roomCode, "players", player.playerId);
-    batch.update(playerRef, {
-      score: Math.min(100000, player.score + pointsEarned),
-      streak: isCorrect ? Math.min(50, player.streak + 1) : 0,
-      lastPointsEarned: pointsEarned,
-      lastAnswerCorrect: isCorrect,
-      updatedAt: serverTimestamp(),
-    });
-  }
 
   try {
     await batch.commit();
@@ -451,27 +776,108 @@ export async function hostLockAndScoreRound(params: {
   }
 }
 
-export async function hostAdvanceNext(db: Firestore, room: StudyRoomDocument): Promise<void> {
-  const path = `studyRooms/${room.roomCode}`;
-  const nextIndex = room.currentQuestionIndex + 1;
-  const hasMore = nextIndex < room.questions.length;
+export async function syncLocalPlayerState(params: {
+  db: Firestore;
+  roomCode: string;
+  playerId: string;
+  state: {
+    alive: boolean;
+    hp: number;
+    shield: number;
+    ammo: number;
+    kills: number;
+    hasMedallion: boolean;
+    questionsCorrect: number;
+    questionsAttempted: number;
+    x: number;
+    y: number;
+    aimAngle: number;
+    exposedUntilMs: number;
+    placement: number;
+    lastShotId: string;
+    lastShotX: number;
+    lastShotY: number;
+    lastShotVx: number;
+    lastShotVy: number;
+    lastShotAtMs: number;
+  };
+}): Promise<void> {
+  const { db, roomCode, playerId, state } = params;
+  const path = `studyRooms/${roomCode}/players/${playerId}`;
+  const safeAngle = Number.isFinite(state.aimAngle) ? Number(state.aimAngle.toFixed(3)) : 0;
+  const safeFinite = (val: number) => (Number.isFinite(val) ? Math.round(val) : 0);
 
   try {
-    if (hasMore) {
-      await updateDoc(doc(db, "studyRooms", room.roomCode), {
-        status: "question",
-        currentQuestionIndex: nextIndex,
-        questionStartedAtMs: Date.now(),
-        answersLocked: false,
-        updatedAt: serverTimestamp(),
-      });
-    } else {
-      await updateDoc(doc(db, "studyRooms", room.roomCode), {
-        status: "finished",
-        updatedAt: serverTimestamp(),
-      });
-    }
+    await updateDoc(doc(db, "studyRooms", roomCode, "players", playerId), {
+      alive: state.alive,
+      hp: Math.max(0, Math.min(100, Math.round(state.hp))),
+      shield: Math.max(0, Math.min(100, Math.round(state.shield))),
+      ammo: Math.max(0, Math.min(500, Math.round(state.ammo))),
+      kills: Math.max(0, Math.min(50, Math.round(state.kills))),
+      hasMedallion: Boolean(state.hasMedallion),
+      questionsCorrect: Math.max(0, Math.min(200, Math.round(state.questionsCorrect))),
+      questionsAttempted: Math.max(0, Math.min(200, Math.round(state.questionsAttempted))),
+      x: Math.max(0, Math.min(ARENA_SIZE, safeFinite(state.x))),
+      y: Math.max(0, Math.min(ARENA_SIZE, safeFinite(state.y))),
+      aimAngle: safeAngle,
+      exposedUntilMs: Math.max(0, safeFinite(state.exposedUntilMs)),
+      placement: Math.max(0, Math.min(20, Math.round(state.placement))),
+      lastShotId: state.lastShotId.slice(0, 48),
+      lastShotX: safeFinite(state.lastShotX),
+      lastShotY: safeFinite(state.lastShotY),
+      lastShotVx: safeFinite(state.lastShotVx),
+      lastShotVy: safeFinite(state.lastShotVy),
+      lastShotAtMs: Math.max(0, safeFinite(state.lastShotAtMs)),
+      updatedAt: serverTimestamp(),
+    });
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, path);
   }
 }
+
+export async function syncWorldState(params: {
+  db: Firestore;
+  roomCode: string;
+  bots: BotState[];
+  miniBozzes: MiniBozzState[];
+  firewalls: FirewallWall[];
+  crateStates: SyncedCrateState[];
+  killFeed: string[];
+}): Promise<void> {
+  const { db, roomCode, bots, miniBozzes, firewalls, crateStates, killFeed } = params;
+  const path = `studyRooms/${roomCode}/world/state`;
+  try {
+    await setDoc(doc(db, "studyRooms", roomCode, "world", "state"), {
+      bots: bots.slice(0, 20),
+      miniBozzes: miniBozzes.slice(0, 4),
+      firewalls: firewalls.slice(0, 24),
+      crateStates: crateStates.slice(0, 60),
+      killFeed: killFeed.slice(0, 10),
+      updatedAt: serverTimestamp(),
+    } satisfies StudyWorldStateDocument);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function hostFinishRoyaleMatch(params: {
+  db: Firestore;
+  roomCode: string;
+  winnerId: string;
+  winnerName: string;
+}): Promise<void> {
+  const { db, roomCode, winnerId, winnerName } = params;
+  const path = `studyRooms/${roomCode}`;
+  try {
+    await updateDoc(doc(db, "studyRooms", roomCode), {
+      status: "finished",
+      winnerId: winnerId.slice(0, 64),
+      winnerName: winnerName.slice(0, 32),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export { getTierFromMmr };

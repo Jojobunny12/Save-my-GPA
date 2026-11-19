@@ -654,7 +654,7 @@ export default function StudyDeckView({
                 className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#0B0B10] border border-emerald-400/45 text-xs font-mono text-emerald-300 hover:border-emerald-400 cursor-pointer whitespace-nowrap"
               >
                 <Swords className="h-3.5 w-3.5" />
-                <span>Host Study Battle</span>
+                <span>Host Bozz Battles</span>
               </button>
               <button
                 type="button"

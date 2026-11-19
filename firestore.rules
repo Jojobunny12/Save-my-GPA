@@ -29,89 +29,143 @@ service cloud.firestore {
       return code is string && code.size() == 4 && code.matches('^[A-Z]{4}$');
     }
 
-    function isValidAnswerId(answerId) {
-      return answerId is string && answerId.size() >= 8 && answerId.size() <= 80 && answerId.matches('^[0-9]+_[a-zA-Z0-9_\\-]+$');
+    function isValidTier(tier) {
+      return tier in ['Bronze', 'Silver', 'Gold', 'Platinum', 'Diamond', 'Grand Gbozz'];
     }
 
-    // Validation Blueprint: StudyRoom
+    // Validation Blueprint: StudyRoom (2D Battle Royale)
     function isValidStudyRoom(data, roomCode) {
       return data.keys().hasAll([
           'roomCode', 'hostId', 'hostName', 'title', 'status',
-          'currentQuestionIndex', 'questionStartedAtMs', 'questionDurationSec',
-          'answersLocked', 'questions', 'createdAt', 'updatedAt'
+          'targetPlayers', 'countdownEndsAtMs', 'matchStartedAtMs',
+          'arenaSeed', 'questions', 'winnerId', 'winnerName',
+          'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
           'roomCode', 'hostId', 'hostName', 'title', 'status',
-          'currentQuestionIndex', 'questionStartedAtMs', 'questionDurationSec',
-          'answersLocked', 'questions', 'createdAt', 'updatedAt'
+          'targetPlayers', 'countdownEndsAtMs', 'matchStartedAtMs',
+          'arenaSeed', 'questions', 'winnerId', 'winnerName',
+          'createdAt', 'updatedAt'
         ])
         && data.roomCode == roomCode
         && isValidRoomCode(data.roomCode)
         && isValidId(data.hostId)
         && data.hostName is string && data.hostName.size() >= 1 && data.hostName.size() <= 32
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
-        && data.status in ['lobby', 'question', 'leaderboard', 'finished']
-        && data.currentQuestionIndex is int
-        && data.currentQuestionIndex >= 0
+        && data.status in ['lobby', 'active', 'finished']
+        && data.targetPlayers is int && data.targetPlayers >= 2 && data.targetPlayers <= 20
+        && data.countdownEndsAtMs is number && data.countdownEndsAtMs >= 0
+        && data.matchStartedAtMs is number && data.matchStartedAtMs >= 0
+        && data.arenaSeed is int && data.arenaSeed >= 0
         && data.questions is list
         && data.questions.size() >= 1
         && data.questions.size() <= 50
         && data.questions[0] is map
         && data.questions[0].question is string
         && data.questions[0].options is list
-        && data.currentQuestionIndex < data.questions.size()
-        && data.questionStartedAtMs is number && data.questionStartedAtMs >= 0
-        && data.questionDurationSec is int && data.questionDurationSec >= 5 && data.questionDurationSec <= 60
-        && data.answersLocked is bool
+        && data.winnerId is string && data.winnerId.size() <= 64
+        && data.winnerName is string && data.winnerName.size() <= 32
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
 
-    // Validation Blueprint: StudyPlayer
+    // Validation Blueprint: StudyPlayer (Live Top-Down Bozz Battles State)
     function isValidStudyPlayer(data, playerId) {
       return data.keys().hasAll([
-          'playerId', 'displayName', 'score', 'streak',
-          'lastPointsEarned', 'lastAnswerCorrect', 'isHost',
+          'playerId', 'displayName', 'mmr', 'tier', 'isHost',
+          'alive', 'hp', 'shield', 'ammo', 'kills', 'hasMedallion',
+          'questionsCorrect', 'questionsAttempted', 'x', 'y', 'aimAngle',
+          'exposedUntilMs', 'placement',
+          'lastShotId', 'lastShotX', 'lastShotY', 'lastShotVx', 'lastShotVy', 'lastShotAtMs',
           'joinedAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
-          'playerId', 'displayName', 'score', 'streak',
-          'lastPointsEarned', 'lastAnswerCorrect', 'isHost',
+          'playerId', 'displayName', 'mmr', 'tier', 'isHost',
+          'alive', 'hp', 'shield', 'ammo', 'kills', 'hasMedallion',
+          'questionsCorrect', 'questionsAttempted', 'x', 'y', 'aimAngle',
+          'exposedUntilMs', 'placement',
+          'lastShotId', 'lastShotX', 'lastShotY', 'lastShotVx', 'lastShotVy', 'lastShotAtMs',
           'joinedAt', 'updatedAt'
         ])
         && data.playerId == playerId
         && isValidId(data.playerId)
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 24
-        && data.score is int && data.score >= 0 && data.score <= 100000
-        && data.streak is int && data.streak >= 0 && data.streak <= 50
-        && data.lastPointsEarned is int && data.lastPointsEarned >= 0 && data.lastPointsEarned <= 1000
-        && data.lastAnswerCorrect is bool
+        && data.mmr is int && data.mmr >= 0 && data.mmr <= 5000
+        && isValidTier(data.tier)
         && data.isHost is bool
+        && data.alive is bool
+        && data.hp is int && data.hp >= 0 && data.hp <= 100
+        && data.shield is int && data.shield >= 0 && data.shield <= 100
+        && data.ammo is int && data.ammo >= 0 && data.ammo <= 500
+        && data.kills is int && data.kills >= 0 && data.kills <= 50
+        && data.hasMedallion is bool
+        && data.questionsCorrect is int && data.questionsCorrect >= 0 && data.questionsCorrect <= 200
+        && data.questionsAttempted is int && data.questionsAttempted >= 0 && data.questionsAttempted <= 200
+        && data.x is number && data.x >= 0 && data.x <= 2400
+        && data.y is number && data.y >= 0 && data.y <= 2400
+        && data.aimAngle is number
+        && data.exposedUntilMs is number && data.exposedUntilMs >= 0
+        && data.placement is int && data.placement >= 0 && data.placement <= 20
+        && data.lastShotId is string && data.lastShotId.size() <= 48
+        && data.lastShotX is number
+        && data.lastShotY is number
+        && data.lastShotVx is number
+        && data.lastShotVy is number
+        && data.lastShotAtMs is number && data.lastShotAtMs >= 0
         && data.joinedAt is timestamp
         && data.updatedAt is timestamp;
     }
 
-    // Validation Blueprint: StudyAnswer
-    function isValidStudyAnswer(data) {
-      return data.keys().hasAll(['playerId', 'questionIndex', 'selectedIndex', 'answeredAtMs', 'createdAt'])
-        && data.keys().hasOnly(['playerId', 'questionIndex', 'selectedIndex', 'answeredAtMs', 'createdAt'])
-        && isValidId(data.playerId)
-        && data.questionIndex is int && data.questionIndex >= 0 && data.questionIndex < 50
-        && data.selectedIndex is int && data.selectedIndex >= 0 && data.selectedIndex <= 3
-        && data.answeredAtMs is number && data.answeredAtMs >= 0
-        && data.createdAt is timestamp;
+    // Validation Blueprint: StudyWorldState (Bots, Mini-Bozzes, Firewalls, Crates, KillFeed)
+    function isValidWorldState(data) {
+      return data.keys().hasAll(['bots', 'miniBozzes', 'firewalls', 'crateStates', 'killFeed', 'updatedAt'])
+        && data.keys().hasOnly(['bots', 'miniBozzes', 'firewalls', 'crateStates', 'killFeed', 'updatedAt'])
+        && data.bots is list && data.bots.size() <= 20
+        && data.miniBozzes is list && data.miniBozzes.size() <= 4
+        && data.firewalls is list && data.firewalls.size() <= 24
+        && data.crateStates is list && data.crateStates.size() <= 60
+        && data.killFeed is list && data.killFeed.size() <= 10
+        && data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: BattleProfile (Competitive ELO/MMR Rank)
+    function isValidBattleProfile(data, profileId) {
+      return data.keys().hasAll([
+          'profileId', 'displayName', 'mmr', 'peakMmr', 'tier',
+          'matchesPlayed', 'wins', 'totalKills',
+          'questionsCorrect', 'questionsAttempted',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'profileId', 'displayName', 'mmr', 'peakMmr', 'tier',
+          'matchesPlayed', 'wins', 'totalKills',
+          'questionsCorrect', 'questionsAttempted',
+          'createdAt', 'updatedAt'
+        ])
+        && data.profileId == profileId
+        && isValidId(data.profileId)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 24
+        && data.mmr is int && data.mmr >= 0 && data.mmr <= 5000
+        && data.peakMmr is int && data.peakMmr >= 0 && data.peakMmr <= 5000
+        && isValidTier(data.tier)
+        && data.matchesPlayed is int && data.matchesPlayed >= 0 && data.matchesPlayed <= 100000
+        && data.wins is int && data.wins >= 0 && data.wins <= 100000
+        && data.totalKills is int && data.totalKills >= 0 && data.totalKills <= 1000000
+        && data.questionsCorrect is int && data.questionsCorrect >= 0 && data.questionsCorrect <= 1000000
+        && data.questionsAttempted is int && data.questionsAttempted >= 0 && data.questionsAttempted <= 1000000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
     }
 
     match /studyRooms/{roomCode} {
-      // Only fetch by exact 4-letter uppercase roomCode; block global list scraping
       allow get: if isValidRoomCode(roomCode);
       allow list: if false;
 
       allow create: if isValidRoomCode(roomCode)
         && isValidStudyRoom(incoming(), roomCode)
         && incoming().status == 'lobby'
-        && incoming().currentQuestionIndex == 0
-        && incoming().answersLocked == false
+        && incoming().winnerId == ''
+        && incoming().winnerName == ''
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
 
@@ -123,56 +177,30 @@ service cloud.firestore {
         && incoming().hostName == existing().hostName
         && incoming().title == existing().title
         && incoming().questions == existing().questions
-        && incoming().questionDurationSec == existing().questionDurationSec
+        && incoming().targetPlayers == existing().targetPlayers
+        && incoming().arenaSeed == existing().arenaSeed
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          // Action: Start first question from lobby
+          // Action: Extend or reset lobby countdown before start
           (
             existing().status == 'lobby'
-            && incoming().status == 'question'
-            && incoming().currentQuestionIndex == 0
-            && incoming().answersLocked == false
-            && incoming().diff(existing()).affectedKeys().hasOnly([
-              'status', 'currentQuestionIndex', 'questionStartedAtMs', 'answersLocked', 'updatedAt'
-            ])
+            && incoming().status == 'lobby'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['countdownEndsAtMs', 'updatedAt'])
           )
           ||
-          // Action: Advance to next question from leaderboard
+          // Action: Launch active Battle Royale match from lobby
           (
-            existing().status == 'leaderboard'
-            && incoming().status == 'question'
-            && incoming().currentQuestionIndex == existing().currentQuestionIndex + 1
-            && incoming().answersLocked == false
-            && incoming().diff(existing()).affectedKeys().hasOnly([
-              'status', 'currentQuestionIndex', 'questionStartedAtMs', 'answersLocked', 'updatedAt'
-            ])
+            existing().status == 'lobby'
+            && incoming().status == 'active'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'matchStartedAtMs', 'updatedAt'])
           )
           ||
-          // Action: Lock answers during active question
+          // Action: Conclude Battle Royale match and record winner
           (
-            existing().status == 'question'
-            && incoming().status == 'question'
-            && incoming().answersLocked == true
-            && incoming().currentQuestionIndex == existing().currentQuestionIndex
-            && incoming().diff(existing()).affectedKeys().hasOnly(['answersLocked', 'updatedAt'])
-          )
-          ||
-          // Action: Reveal round leaderboard from question
-          (
-            existing().status == 'question'
-            && incoming().status == 'leaderboard'
-            && incoming().answersLocked == true
-            && incoming().currentQuestionIndex == existing().currentQuestionIndex
-            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'answersLocked', 'updatedAt'])
-          )
-          ||
-          // Action: Finish session from leaderboard
-          (
-            existing().status == 'leaderboard'
+            existing().status == 'active'
             && incoming().status == 'finished'
-            && incoming().currentQuestionIndex == existing().currentQuestionIndex
-            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'winnerId', 'winnerName', 'updatedAt'])
           )
         );
 
@@ -184,10 +212,10 @@ service cloud.firestore {
         allow create: if isValidRoomCode(roomCode)
           && isValidId(playerId)
           && isValidStudyPlayer(incoming(), playerId)
-          && incoming().score == 0
-          && incoming().streak == 0
-          && incoming().lastPointsEarned == 0
-          && incoming().lastAnswerCorrect == false
+          && incoming().hp == 100
+          && incoming().kills == 0
+          && incoming().alive == true
+          && incoming().placement == 0
           && incoming().joinedAt == request.time
           && incoming().updatedAt == request.time
           && exists(/databases/$(database)/documents/studyRooms/$(roomCode))
@@ -200,32 +228,56 @@ service cloud.firestore {
           && incoming().displayName == existing().displayName
           && incoming().isHost == existing().isHost
           && incoming().joinedAt == existing().joinedAt
-          && incoming().score >= existing().score
           && incoming().updatedAt == request.time
           && incoming().diff(existing()).affectedKeys().hasOnly([
-            'score', 'streak', 'lastPointsEarned', 'lastAnswerCorrect', 'updatedAt'
+            'alive', 'hp', 'shield', 'ammo', 'kills', 'hasMedallion',
+            'questionsCorrect', 'questionsAttempted', 'x', 'y', 'aimAngle',
+            'exposedUntilMs', 'placement',
+            'lastShotId', 'lastShotX', 'lastShotY', 'lastShotVx', 'lastShotVy', 'lastShotAtMs',
+            'updatedAt'
           ])
+          && exists(/databases/$(database)/documents/studyRooms/$(roomCode))
           && get(/databases/$(database)/documents/studyRooms/$(roomCode)).data.status != 'finished';
 
         allow delete: if false;
       }
 
-      match /answers/{answerId} {
-        allow get, list: if isValidRoomCode(roomCode);
+      match /world/{docId} {
+        allow get: if isValidRoomCode(roomCode) && docId == 'state';
+        allow list: if false;
 
-        allow create: if isValidRoomCode(roomCode)
-          && isValidAnswerId(answerId)
-          && isValidStudyAnswer(incoming())
-          && answerId == string(incoming().questionIndex) + '_' + incoming().playerId
-          && incoming().createdAt == request.time
+        allow create, update: if isValidRoomCode(roomCode)
+          && docId == 'state'
+          && isValidWorldState(incoming())
+          && incoming().updatedAt == request.time
           && exists(/databases/$(database)/documents/studyRooms/$(roomCode))
-          && exists(/databases/$(database)/documents/studyRooms/$(roomCode)/players/$(incoming().playerId))
-          && get(/databases/$(database)/documents/studyRooms/$(roomCode)).data.status == 'question'
-          && get(/databases/$(database)/documents/studyRooms/$(roomCode)).data.answersLocked == false
-          && incoming().questionIndex == get(/databases/$(database)/documents/studyRooms/$(roomCode)).data.currentQuestionIndex;
+          && get(/databases/$(database)/documents/studyRooms/$(roomCode)).data.status != 'finished';
 
-        allow update, delete: if false;
+        allow delete: if false;
       }
+    }
+
+    match /battleProfiles/{profileId} {
+      allow get: if isValidId(profileId);
+      allow list: if false;
+
+      allow create: if isValidId(profileId)
+        && isValidBattleProfile(incoming(), profileId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(profileId)
+        && isValidBattleProfile(incoming(), profileId)
+        && incoming().profileId == existing().profileId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName', 'mmr', 'peakMmr', 'tier',
+          'matchesPlayed', 'wins', 'totalKills',
+          'questionsCorrect', 'questionsAttempted', 'updatedAt'
+        ]);
+
+      allow delete: if false;
     }
   }
 }

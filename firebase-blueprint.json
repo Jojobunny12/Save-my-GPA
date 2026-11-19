@@ -2,7 +2,7 @@
   "entities": {
     "StudyRoom": {
       "title": "StudyRoom",
-      "description": "A real-time multiplayer Study Battle quiz room identified by a 4-letter uppercase room code.",
+      "description": "A real-time 2D Study Battle Royale match room identified by a 4-letter uppercase room code.",
       "type": "object",
       "properties": {
         "roomCode": {
@@ -14,7 +14,7 @@
         },
         "hostId": {
           "type": "string",
-          "description": "Client-generated host identifier for authoritative room control.",
+          "description": "Client-generated host identifier for authoritative lobby and bot state control.",
           "minLength": 6,
           "maxLength": 64,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
@@ -27,34 +27,46 @@
         },
         "title": {
           "type": "string",
-          "description": "Title of the study battle quiz.",
+          "description": "Title of the study battle royale session.",
           "minLength": 1,
           "maxLength": 120
         },
         "status": {
           "type": "string",
-          "description": "Current multiplayer quiz phase.",
-          "enum": ["lobby", "question", "leaderboard", "finished"]
+          "description": "Current battle royale match phase.",
+          "enum": ["lobby", "active", "finished"]
         },
-        "currentQuestionIndex": {
+        "targetPlayers": {
           "type": "integer",
-          "description": "Zero-based index of the active question."
+          "description": "Target lobby size before bot backfill (e.g., 20)."
         },
-        "questionStartedAtMs": {
+        "countdownEndsAtMs": {
           "type": "number",
-          "description": "Epoch timestamp in milliseconds when the active question timer started."
+          "description": "Epoch timestamp in milliseconds when the 15s pre-match lobby countdown finishes."
         },
-        "questionDurationSec": {
+        "matchStartedAtMs": {
+          "type": "number",
+          "description": "Epoch timestamp in milliseconds when the battle royale arena match started."
+        },
+        "arenaSeed": {
           "type": "integer",
-          "description": "Countdown duration per question in seconds (15)."
-        },
-        "answersLocked": {
-          "type": "boolean",
-          "description": "Whether answers for the active question are locked by the host."
+          "description": "Deterministic seed used by all clients to lay out identical obstacles and crates."
         },
         "questions": {
           "type": "array",
-          "description": "List of 1 to 50 multiple-choice quiz questions."
+          "description": "List of 1 to 50 multiple-choice quiz questions used in Study Crates and Knowledge Terminals."
+        },
+        "winnerId": {
+          "type": "string",
+          "description": "ID of the winning player or bot once the match finishes.",
+          "minLength": 0,
+          "maxLength": 64
+        },
+        "winnerName": {
+          "type": "string",
+          "description": "Display name of the match winner.",
+          "minLength": 0,
+          "maxLength": 32
         },
         "createdAt": {
           "type": "string",
@@ -64,7 +76,7 @@
         "updatedAt": {
           "type": "string",
           "format": "date-time",
-          "description": "Server timestamp of the latest host state transition."
+          "description": "Server timestamp of the latest room state update."
         }
       },
       "required": [
@@ -73,18 +85,20 @@
         "hostName",
         "title",
         "status",
-        "currentQuestionIndex",
-        "questionStartedAtMs",
-        "questionDurationSec",
-        "answersLocked",
+        "targetPlayers",
+        "countdownEndsAtMs",
+        "matchStartedAtMs",
+        "arenaSeed",
         "questions",
+        "winnerId",
+        "winnerName",
         "createdAt",
         "updatedAt"
       ]
     },
     "StudyPlayer": {
       "title": "StudyPlayer",
-      "description": "A participant inside a Study Battle room with real-time score and streak.",
+      "description": "A human participant inside a 2D Study Battle Royale room with real-time position, combat stats, and quiz accuracy.",
       "type": "object",
       "properties": {
         "playerId": {
@@ -96,29 +110,100 @@
         },
         "displayName": {
           "type": "string",
-          "description": "Player's display name shown in the lobby and podium.",
+          "description": "Player's display name.",
           "minLength": 1,
           "maxLength": 24
         },
-        "score": {
+        "mmr": {
           "type": "integer",
-          "description": "Cumulative score awarded by the host."
+          "description": "Player's competitive MMR entering the match."
         },
-        "streak": {
-          "type": "integer",
-          "description": "Current consecutive correct answers."
-        },
-        "lastPointsEarned": {
-          "type": "integer",
-          "description": "Points earned on the most recently graded question."
-        },
-        "lastAnswerCorrect": {
-          "type": "boolean",
-          "description": "Whether the most recently graded question was answered correctly."
+        "tier": {
+          "type": "string",
+          "description": "Player's competitive tier name.",
+          "enum": ["Bronze", "Silver", "Gold", "Platinum", "Diamond", "Grand Gbozz"]
         },
         "isHost": {
           "type": "boolean",
-          "description": "Whether this participant is also playing as the host."
+          "description": "Whether this participant is the room host."
+        },
+        "alive": {
+          "type": "boolean",
+          "description": "Whether the player is currently alive in the arena."
+        },
+        "hp": {
+          "type": "integer",
+          "description": "Current health points (0-100)."
+        },
+        "shield": {
+          "type": "integer",
+          "description": "Current shield points (0-100)."
+        },
+        "ammo": {
+          "type": "integer",
+          "description": "Current blaster projectile ammo count."
+        },
+        "kills": {
+          "type": "integer",
+          "description": "Number of eliminations in this match."
+        },
+        "hasMedallion": {
+          "type": "boolean",
+          "description": "Whether the player holds a Bozz Medallion (shield regen + gold minimap ring)."
+        },
+        "questionsCorrect": {
+          "type": "integer",
+          "description": "Number of crate/terminal questions answered correctly."
+        },
+        "questionsAttempted": {
+          "type": "integer",
+          "description": "Total number of crate/terminal questions attempted."
+        },
+        "x": {
+          "type": "number",
+          "description": "Current world X coordinate inside the 2D arena."
+        },
+        "y": {
+          "type": "number",
+          "description": "Current world Y coordinate inside the 2D arena."
+        },
+        "aimAngle": {
+          "type": "number",
+          "description": "Current aiming angle in radians."
+        },
+        "exposedUntilMs": {
+          "type": "number",
+          "description": "Epoch ms until minimap exposure ends after a wrong quiz answer."
+        },
+        "placement": {
+          "type": "integer",
+          "description": "Final placement rank (1-20, or 0 while active)."
+        },
+        "lastShotId": {
+          "type": "string",
+          "description": "Identifier of most recent projectile fired by this player for remote rendering.",
+          "minLength": 0,
+          "maxLength": 48
+        },
+        "lastShotX": {
+          "type": "number",
+          "description": "Spawn X coordinate of the most recent shot."
+        },
+        "lastShotY": {
+          "type": "number",
+          "description": "Spawn Y coordinate of the most recent shot."
+        },
+        "lastShotVx": {
+          "type": "number",
+          "description": "Velocity X of the most recent shot."
+        },
+        "lastShotVy": {
+          "type": "number",
+          "description": "Velocity Y of the most recent shot."
+        },
+        "lastShotAtMs": {
+          "type": "number",
+          "description": "Epoch ms of the most recent shot."
         },
         "joinedAt": {
           "type": "string",
@@ -128,78 +213,165 @@
         "updatedAt": {
           "type": "string",
           "format": "date-time",
-          "description": "Server timestamp of the latest score update."
+          "description": "Server timestamp of the latest sync update."
         }
       },
       "required": [
         "playerId",
         "displayName",
-        "score",
-        "streak",
-        "lastPointsEarned",
-        "lastAnswerCorrect",
+        "mmr",
+        "tier",
         "isHost",
+        "alive",
+        "hp",
+        "shield",
+        "ammo",
+        "kills",
+        "hasMedallion",
+        "questionsCorrect",
+        "questionsAttempted",
+        "x",
+        "y",
+        "aimAngle",
+        "exposedUntilMs",
+        "placement",
+        "lastShotId",
+        "lastShotX",
+        "lastShotY",
+        "lastShotVx",
+        "lastShotVy",
+        "lastShotAtMs",
         "joinedAt",
         "updatedAt"
       ]
     },
-    "StudyAnswer": {
-      "title": "StudyAnswer",
-      "description": "A single player's locked answer submission for a specific question index.",
+    "StudyWorldState": {
+      "title": "StudyWorldState",
+      "description": "Authoritative synced bot states, AI Mini-Bozzes, Firewall Cover walls, crate cooldown locks, and kill feed for a Bozz Battles room.",
       "type": "object",
       "properties": {
-        "playerId": {
+        "bots": {
+          "type": "array",
+          "description": "Backfilled AI bot states (up to 20)."
+        },
+        "miniBozzes": {
+          "type": "array",
+          "description": "AI Mini-Bozzes guarding major POIs (up to 4)."
+        },
+        "firewalls": {
+          "type": "array",
+          "description": "Deployed temporary Firewall Cover walls (up to 24)."
+        },
+        "crateStates": {
+          "type": "array",
+          "description": "Locked or depleted crate/terminal timers synced across players."
+        },
+        "killFeed": {
+          "type": "array",
+          "description": "Most recent elimination and achievement feed entries (up to 10)."
+        },
+        "updatedAt": {
           "type": "string",
-          "description": "ID of the player submitting the answer.",
+          "format": "date-time",
+          "description": "Server timestamp of the latest world snapshot."
+        }
+      },
+      "required": ["bots", "miniBozzes", "firewalls", "crateStates", "killFeed", "updatedAt"]
+    },
+    "BattleProfile": {
+      "title": "BattleProfile",
+      "description": "Persistent ranked MMR and competitive tier progression for a Bozz Battles player.",
+      "type": "object",
+      "properties": {
+        "profileId": {
+          "type": "string",
+          "description": "Client-scoped profile token.",
           "minLength": 6,
           "maxLength": 64,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
         },
-        "questionIndex": {
-          "type": "integer",
-          "description": "Zero-based question index answered."
+        "displayName": {
+          "type": "string",
+          "description": "Preferred player display name.",
+          "minLength": 1,
+          "maxLength": 24
         },
-        "selectedIndex": {
+        "mmr": {
           "type": "integer",
-          "description": "Selected option index (0..3)."
+          "description": "Current ELO/MMR rating (0-5000)."
         },
-        "answeredAtMs": {
-          "type": "number",
-          "description": "Client timestamp when the option was selected."
+        "peakMmr": {
+          "type": "integer",
+          "description": "Highest ELO/MMR achieved."
+        },
+        "tier": {
+          "type": "string",
+          "description": "Competitive rank tier.",
+          "enum": ["Bronze", "Silver", "Gold", "Platinum", "Diamond", "Grand Gbozz"]
+        },
+        "matchesPlayed": {
+          "type": "integer",
+          "description": "Total Bozz Battles matches completed."
+        },
+        "wins": {
+          "type": "integer",
+          "description": "Total #1 Victory Bozz wins."
+        },
+        "totalKills": {
+          "type": "integer",
+          "description": "Cumulative opponent eliminations."
+        },
+        "questionsCorrect": {
+          "type": "integer",
+          "description": "Cumulative crate/terminal questions answered correctly."
+        },
+        "questionsAttempted": {
+          "type": "integer",
+          "description": "Cumulative crate/terminal questions attempted."
         },
         "createdAt": {
           "type": "string",
           "format": "date-time",
-          "description": "Server timestamp when the answer was recorded."
+          "description": "Server timestamp when the profile was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest ranked update."
         }
       },
       "required": [
-        "playerId",
-        "questionIndex",
-        "selectedIndex",
-        "answeredAtMs",
-        "createdAt"
+        "profileId",
+        "displayName",
+        "mmr",
+        "peakMmr",
+        "tier",
+        "matchesPlayed",
+        "wins",
+        "totalKills",
+        "questionsCorrect",
+        "questionsAttempted",
+        "createdAt",
+        "updatedAt"
       ]
     }
   },
   "firestore": {
     "/studyRooms/{roomCode}": {
-      "schema": {
-        "$ref": "#/entities/StudyRoom"
-      },
-      "description": "Live Study Battle rooms keyed by 4-letter uppercase join codes."
+      "schema": { "$ref": "#/entities/StudyRoom" },
+      "description": "Live Bozz Battles rooms keyed by 4-letter uppercase join codes."
     },
     "/studyRooms/{roomCode}/players/{playerId}": {
-      "schema": {
-        "$ref": "#/entities/StudyPlayer"
-      },
-      "description": "Players participating in a specific Study Battle room."
+      "schema": { "$ref": "#/entities/StudyPlayer" },
+      "description": "Human participants inside a live Bozz Battles room."
     },
-    "/studyRooms/{roomCode}/answers/{answerId}": {
-      "schema": {
-        "$ref": "#/entities/StudyAnswer"
-      },
-      "description": "Submitted multiple-choice answers per question and player for host grading."
+    "/studyRooms/{roomCode}/world/{docId}": {
+      "schema": { "$ref": "#/entities/StudyWorldState" },
+      "description": "Authoritative bot, Mini-Bozz, Firewall Cover, crate lock, and kill feed state for the room."
+    },
+    "/battleProfiles/{profileId}": {
+      "schema": { "$ref": "#/entities/BattleProfile" },
+      "description": "Competitive ELO/MMR and tier progression records."
     }
   }
 }

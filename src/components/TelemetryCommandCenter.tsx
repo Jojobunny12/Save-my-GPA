@@ -155,11 +155,28 @@ export default function TelemetryCommandCenter({
         {/* Main Readiness Telemetry HUD */}
         <motion.section
           variants={STAGGER_ITEM}
-          className="lg:col-span-8 bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-6 md:p-7 flex flex-col justify-between gap-6"
+          className="lg:col-span-8 specular-panel backdrop-blur-2xl border border-white/10 rounded-2xl p-6 md:p-7 flex flex-col justify-between gap-6"
         >
           <div className="flex flex-col md:flex-row md:items-center gap-7">
-            {/* Animated SVG Ring */}
+            {/* Animated SVG Ring with Orbital Sweep */}
             <div className="relative flex items-center justify-center shrink-0 mx-auto md:mx-0">
+              <svg
+                width="210"
+                height="210"
+                viewBox="0 0 210 210"
+                className="absolute inset-0 -m-[7px] pointer-events-none animate-orbit-slow opacity-60"
+              >
+                <circle
+                  cx="105"
+                  cy="105"
+                  r="98"
+                  fill="none"
+                  stroke="rgba(16,185,129,0.2)"
+                  strokeWidth="1.5"
+                  strokeDasharray="6 14"
+                />
+                <circle cx="105" cy="7" r="3" fill="#8B5CF6" />
+              </svg>
               <svg width="196" height="196" viewBox="0 0 196 196" className="-rotate-90">
                 <circle
                   cx="98"
@@ -225,7 +242,7 @@ export default function TelemetryCommandCenter({
                       : "All Active Courses"}
                   </div>
                   <h1 className="font-display text-2xl sm:text-3xl font-extrabold text-white tracking-tight mt-1">
-                    Bozz GPT Command Center
+                    Gbozz GPT Command Center
                   </h1>
                   <p className="text-xs text-zinc-400 mt-0.5">
                     Zero passive re-reading. Lock in concepts before the forgetting curve hits.
@@ -316,7 +333,7 @@ export default function TelemetryCommandCenter({
                   className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/50 text-emerald-200 font-semibold text-xs rounded-xl cursor-pointer whitespace-nowrap"
                 >
                   <Swords className="h-4 w-4 text-emerald-400" />
-                  <span>Multiplayer Study Battle</span>
+                  <span>Bozz Battles Royale</span>
                 </motion.button>
 
                 <motion.button
@@ -362,7 +379,7 @@ export default function TelemetryCommandCenter({
           className="lg:col-span-4 flex flex-col gap-4 justify-between"
         >
           {/* Test Date Anchor Card */}
-          <div className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-5 space-y-3">
+          <div className="specular-panel backdrop-blur-2xl border border-white/10 rounded-2xl p-5 space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-xs font-semibold text-zinc-100">
                 <CalendarClock className="h-4 w-4 text-purple-400" />
@@ -398,7 +415,7 @@ export default function TelemetryCommandCenter({
           </div>
 
           {/* Ultradian / Pomodoro Timer Card */}
-          <div className="bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-5 space-y-3.5 flex-1 flex flex-col justify-between">
+          <div className="specular-panel backdrop-blur-2xl border border-white/10 rounded-2xl p-5 space-y-3.5 flex-1 flex flex-col justify-between">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-xs font-semibold text-zinc-100">
                 <Clock className="h-4 w-4 text-emerald-400" />
@@ -469,121 +486,186 @@ export default function TelemetryCommandCenter({
         </motion.aside>
       </div>
 
-      {/* Scientific Module Launcher Grid */}
-      <motion.section variants={STAGGER_ITEM} className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="font-display text-sm font-bold text-zinc-100 tracking-tight">
-            Bozz GPT Cognitive Engines
-          </h2>
-          <span className="text-xs font-mono text-zinc-400">
-            Active Recall · FSRS · Boss Simulation
-          </span>
+      {/* Organized Two-Tier Scientific Module Launcher */}
+      <motion.section variants={STAGGER_ITEM} className="space-y-5">
+        <div className="space-y-2.5">
+          <div className="flex items-center justify-between">
+            <h2 className="font-display text-sm font-bold text-zinc-100 tracking-tight">
+              01 · Core Memory &amp; Cognitive Labs
+            </h2>
+            <span className="text-xs font-mono text-zinc-400">
+              Active Recall · Interleaving · Socratic Synthesis
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <motion.button
+              type="button"
+              whileHover={MAGNETIC_HOVER}
+              whileTap={BUTTON_TAP}
+              onClick={() => onNavigate("recall")}
+              className="text-left specular-panel backdrop-blur-2xl border border-white/10 hover:border-emerald-400/60 rounded-2xl p-5 flex flex-col justify-between gap-4 cursor-pointer"
+            >
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-emerald-400">
+                  <Layers className="h-5 w-5" />
+                  <span className="text-[11px] font-mono tabular-nums">
+                    {readiness.dueNowCount} due
+                  </span>
+                </div>
+                <h3 className="font-display text-sm font-bold text-white">
+                  3D Recall &amp; Feynman Mode
+                </h3>
+                <p className="text-xs text-zinc-400 leading-relaxed">
+                  Spring-loaded 3D card flips, FSRS intervals, and brutal plain-English Feynman grading.
+                </p>
+              </div>
+              <div className="flex items-center justify-between text-xs font-mono text-emerald-400 pt-2 border-t border-white/10">
+                <span>Start Recall</span>
+                <ChevronRight className="h-4 w-4" />
+              </div>
+            </motion.button>
+
+            <motion.button
+              type="button"
+              whileHover={MAGNETIC_HOVER}
+              whileTap={BUTTON_TAP}
+              onClick={() => onNavigate("royale")}
+              className="text-left specular-panel backdrop-blur-2xl border border-white/10 hover:border-purple-400/60 rounded-2xl p-5 flex flex-col justify-between gap-4 cursor-pointer"
+            >
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-purple-400">
+                  <Activity className="h-5 w-5" />
+                  <span className="text-[11px] font-mono tabular-nums">
+                    {readiness.criticalWeakCount} weak
+                  </span>
+                </div>
+                <h3 className="font-display text-sm font-bold text-white">
+                  Interleaved Weakness Drills
+                </h3>
+                <p className="text-xs text-zinc-400 leading-relaxed">
+                  Cross-unit drills weighted directly toward missed concepts until retention hits 100%.
+                </p>
+              </div>
+              <div className="flex items-center justify-between text-xs font-mono text-purple-400 pt-2 border-t border-white/10">
+                <span>Run Drills</span>
+                <ChevronRight className="h-4 w-4" />
+              </div>
+            </motion.button>
+
+            <motion.button
+              type="button"
+              whileHover={MAGNETIC_HOVER}
+              whileTap={BUTTON_TAP}
+              onClick={() => onNavigate("socratic")}
+              className="text-left specular-panel backdrop-blur-2xl border border-white/10 hover:border-emerald-400/60 rounded-2xl p-5 flex flex-col justify-between gap-4 cursor-pointer"
+            >
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-emerald-400">
+                  <MessageSquareQuote className="h-5 w-5" />
+                  <span className="text-[11px] font-mono">Rubric + Graph</span>
+                </div>
+                <h3 className="font-display text-sm font-bold text-white">
+                  Socratic &amp; Concept Map
+                </h3>
+                <p className="text-xs text-zinc-400 leading-relaxed">
+                  Defend thesis claims against a strict AI moderator or inspect Dual-Coding concept maps.
+                </p>
+              </div>
+              <div className="flex items-center justify-between text-xs font-mono text-emerald-400 pt-2 border-t border-white/10">
+                <span>Open Seminar</span>
+                <ChevronRight className="h-4 w-4" />
+              </div>
+            </motion.button>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <motion.button
-            type="button"
-            whileHover={MAGNETIC_HOVER}
-            whileTap={BUTTON_TAP}
-            onClick={() => onNavigate("recall")}
-            className="text-left bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 hover:border-emerald-400/60 rounded-2xl p-5 flex flex-col justify-between gap-4 cursor-pointer"
-          >
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-emerald-400">
-                <Layers className="h-5 w-5" />
-                <span className="text-[11px] font-mono tabular-nums">
-                  {readiness.dueNowCount} due
-                </span>
-              </div>
-              <h3 className="font-display text-sm font-bold text-white">
-                3D Recall &amp; Feynman Mode
-              </h3>
-              <p className="text-xs text-zinc-400 leading-relaxed">
-                Spring-loaded 3D card flips, FSRS intervals, and brutal plain-English Feynman grading.
-              </p>
-            </div>
-            <div className="flex items-center justify-between text-xs font-mono text-emerald-400 pt-2 border-t border-white/10">
-              <span>Start Recall</span>
-              <ChevronRight className="h-4 w-4" />
-            </div>
-          </motion.button>
+        <div className="space-y-2.5">
+          <div className="flex items-center justify-between">
+            <h2 className="font-display text-sm font-bold text-zinc-100 tracking-tight">
+              02 · Live Combat &amp; Note Ingestion
+            </h2>
+            <span className="text-xs font-mono text-zinc-400">
+              AI-Paced Multiplayer · Boss Exam · Up to 5 Files
+            </span>
+          </div>
 
-          <motion.button
-            type="button"
-            whileHover={MAGNETIC_HOVER}
-            whileTap={BUTTON_TAP}
-            onClick={() => onNavigate("royale")}
-            className="text-left bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 hover:border-purple-400/60 rounded-2xl p-5 flex flex-col justify-between gap-4 cursor-pointer"
-          >
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-purple-400">
-                <Activity className="h-5 w-5" />
-                <span className="text-[11px] font-mono tabular-nums">
-                  {readiness.criticalWeakCount} weak
-                </span>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <motion.button
+              type="button"
+              whileHover={MAGNETIC_HOVER}
+              whileTap={BUTTON_TAP}
+              onClick={() => onNavigate("battle")}
+              className="text-left specular-panel backdrop-blur-2xl border border-emerald-400/40 hover:border-emerald-400 rounded-2xl p-5 flex flex-col justify-between gap-4 cursor-pointer"
+            >
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-emerald-400">
+                  <Swords className="h-5 w-5" />
+                  <span className="text-[11px] font-mono">2D Royale · Gbozz Ranks</span>
+                </div>
+                <h3 className="font-display text-sm font-bold text-white">
+                  Bozz Battles
+                </h3>
+                <p className="text-xs text-zinc-400 leading-relaxed">
+                  2D Battle Royale across Bozz Citadel, Prompt Plaza, Neural Nexus &amp; Data Docks with 5 loot rarities, AI Mini-Bozzes, Firewall Cover, System Glitch Storm &amp; Grand Gbozz MMR.
+                </p>
               </div>
-              <h3 className="font-display text-sm font-bold text-white">
-                Interleaved Weakness Drills
-              </h3>
-              <p className="text-xs text-zinc-400 leading-relaxed">
-                Cross-unit drills weighted directly toward missed concepts until retention hits 100%.
-              </p>
-            </div>
-            <div className="flex items-center justify-between text-xs font-mono text-purple-400 pt-2 border-t border-white/10">
-              <span>Run Drills</span>
-              <ChevronRight className="h-4 w-4" />
-            </div>
-          </motion.button>
+              <div className="flex items-center justify-between text-xs font-mono text-emerald-400 pt-2 border-t border-white/10">
+                <span>Drop In Arena</span>
+                <ChevronRight className="h-4 w-4" />
+              </div>
+            </motion.button>
 
-          <motion.button
-            type="button"
-            whileHover={MAGNETIC_HOVER}
-            whileTap={BUTTON_TAP}
-            onClick={() => onNavigate("boss")}
-            className="text-left bg-[#0B0B10]/85 backdrop-blur-2xl border border-purple-500/35 hover:border-red-400/70 rounded-2xl p-5 flex flex-col justify-between gap-4 cursor-pointer"
-          >
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-red-400">
-                <Swords className="h-5 w-5" />
-                <span className="text-[11px] font-mono">Timed Combat</span>
+            <motion.button
+              type="button"
+              whileHover={MAGNETIC_HOVER}
+              whileTap={BUTTON_TAP}
+              onClick={() => onNavigate("boss")}
+              className="text-left specular-panel backdrop-blur-2xl border border-purple-500/35 hover:border-red-400/70 rounded-2xl p-5 flex flex-col justify-between gap-4 cursor-pointer"
+            >
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-red-400">
+                  <Swords className="h-5 w-5" />
+                  <span className="text-[11px] font-mono">Solo Exam Raid</span>
+                </div>
+                <h3 className="font-display text-sm font-bold text-white">
+                  Final Boss Battle
+                </h3>
+                <p className="text-xs text-zinc-400 leading-relaxed">
+                  High-stakes solo exam simulation with Critical Hits, Boss Phases, Matching Exam, &amp; PDF export.
+                </p>
               </div>
-              <h3 className="font-display text-sm font-bold text-white">
-                Final Boss Battle
-              </h3>
-              <p className="text-xs text-zinc-400 leading-relaxed">
-                High-stakes exam simulation with Critical Hits, Boss Phases, Matching Exam, &amp; PDF export.
-              </p>
-            </div>
-            <div className="flex items-center justify-between text-xs font-mono text-red-400 pt-2 border-t border-white/10">
-              <span>Enter Battle</span>
-              <ChevronRight className="h-4 w-4" />
-            </div>
-          </motion.button>
+              <div className="flex items-center justify-between text-xs font-mono text-red-400 pt-2 border-t border-white/10">
+                <span>Enter Battle</span>
+                <ChevronRight className="h-4 w-4" />
+              </div>
+            </motion.button>
 
-          <motion.button
-            type="button"
-            whileHover={MAGNETIC_HOVER}
-            whileTap={BUTTON_TAP}
-            onClick={() => onNavigate("socratic")}
-            className="text-left bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 hover:border-emerald-400/60 rounded-2xl p-5 flex flex-col justify-between gap-4 cursor-pointer"
-          >
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-emerald-400">
-                <MessageSquareQuote className="h-5 w-5" />
-                <span className="text-[11px] font-mono">Rubric + Graph</span>
+            <motion.button
+              type="button"
+              whileHover={MAGNETIC_HOVER}
+              whileTap={BUTTON_TAP}
+              onClick={() => onNavigate("builder")}
+              className="text-left specular-panel backdrop-blur-2xl border border-white/10 hover:border-purple-400/60 rounded-2xl p-5 flex flex-col justify-between gap-4 cursor-pointer"
+            >
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-purple-400">
+                  <GitBranch className="h-5 w-5" />
+                  <span className="text-[11px] font-mono">Up to 5 Files</span>
+                </div>
+                <h3 className="font-display text-sm font-bold text-white">
+                  Ingest Notes &amp; Build Deck
+                </h3>
+                <p className="text-xs text-zinc-400 leading-relaxed">
+                  Drop up to 5 PDFs, lecture images, or raw notes—or select a D&apos;Evelyn course—to forge FSRS decks.
+                </p>
               </div>
-              <h3 className="font-display text-sm font-bold text-white">
-                Socratic &amp; Concept Map
-              </h3>
-              <p className="text-xs text-zinc-400 leading-relaxed">
-                Defend thesis claims against a strict AI moderator or inspect Dual-Coding concept maps.
-              </p>
-            </div>
-            <div className="flex items-center justify-between text-xs font-mono text-emerald-400 pt-2 border-t border-white/10">
-              <span>Open Seminar</span>
-              <ChevronRight className="h-4 w-4" />
-            </div>
-          </motion.button>
+              <div className="flex items-center justify-between text-xs font-mono text-purple-400 pt-2 border-t border-white/10">
+                <span>Open Studio</span>
+                <ChevronRight className="h-4 w-4" />
+              </div>
+            </motion.button>
+          </div>
         </div>
       </motion.section>
 
@@ -592,7 +674,7 @@ export default function TelemetryCommandCenter({
         {/* Weakest FSRS Concepts */}
         <motion.section
           variants={STAGGER_ITEM}
-          className="lg:col-span-6 bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-6 space-y-4"
+          className="lg:col-span-6 specular-panel backdrop-blur-2xl border border-white/10 rounded-2xl p-6 space-y-4"
         >
           <div className="flex items-center justify-between border-b border-white/10 pb-3">
             <div className="flex items-center gap-2 text-white">
@@ -657,7 +739,7 @@ export default function TelemetryCommandCenter({
         {/* Saved Study Decks */}
         <motion.section
           variants={STAGGER_ITEM}
-          className="lg:col-span-6 bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-2xl p-6 space-y-4"
+          className="lg:col-span-6 specular-panel backdrop-blur-2xl border border-white/10 rounded-2xl p-6 space-y-4"
         >
           <div className="flex items-center justify-between border-b border-white/10 pb-3">
             <h2 className="font-display font-bold text-sm text-white">

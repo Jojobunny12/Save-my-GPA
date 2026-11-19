@@ -33,7 +33,7 @@ const NAV_ITEMS: Array<{ id: WorkspaceRoute; label: string }> = [
   { id: "builder", label: "Ingest Notes" },
   { id: "recall", label: "Active Recall" },
   { id: "boss", label: "Boss Battle" },
-  { id: "battle", label: "Study Battle" },
+  { id: "battle", label: "Bozz Battles" },
 ];
 
 export default function App() {
@@ -194,7 +194,7 @@ export default function App() {
               onClick={() => navigateTo("command")}
               className="font-display text-lg font-extrabold tracking-tight text-white hover:text-purple-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-baseline gap-1.5"
             >
-              <span>Bozz</span>
+              <span>Gbozz</span>
               <span className="text-emerald-400">GPT</span>
             </button>
 
@@ -262,33 +262,39 @@ export default function App() {
 
         {/* Main Workspace */}
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-7 space-y-5">
-          {/* Active Deck & Humanities Utility Strip on Secondary Views */}
-          {route !== "command" && savedDecks.length > 0 && !deckHubOpen && (
-            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 bg-[#0B0B10]/85 backdrop-blur-2xl border border-white/10 rounded-xl text-xs">
-              <div className="flex items-center gap-2.5">
-                <span className="font-mono text-[11px] text-zinc-400">Active Deck:</span>
-                <select
-                  aria-label="Active Study Deck"
-                  value={activeDeck?.id || ""}
-                  onChange={(e) => {
-                    const found = savedDecks.find((d) => d.id === e.target.value);
-                    if (found) setActiveDeck(found);
-                  }}
-                  className="max-w-[260px] px-2.5 py-1 bg-zinc-950 border border-white/10 focus:border-purple-400 rounded-lg font-mono text-xs text-emerald-400 focus:outline-none cursor-pointer"
-                >
-                  {savedDecks.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.courseCode} · {d.courseName}
-                    </option>
-                  ))}
-                </select>
-              </div>
+          {/* Organized Active Deck & Cognitive Labs Bar on Secondary Views */}
+          {route !== "command" && !deckHubOpen && (
+            <div className="specular-panel flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 backdrop-blur-2xl border border-white/10 rounded-xl text-xs">
+              {savedDecks.length > 0 ? (
+                <div className="flex items-center gap-2.5">
+                  <span className="font-mono text-[11px] text-zinc-400">Active Deck:</span>
+                  <select
+                    aria-label="Active Study Deck"
+                    value={activeDeck?.id || ""}
+                    onChange={(e) => {
+                      const found = savedDecks.find((d) => d.id === e.target.value);
+                      if (found) setActiveDeck(found);
+                    }}
+                    className="max-w-[260px] px-2.5 py-1 bg-zinc-950 border border-white/10 focus:border-purple-400 rounded-lg font-mono text-xs text-emerald-400 focus:outline-none cursor-pointer"
+                  >
+                    {savedDecks.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.courseCode} · {d.courseName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <span className="font-mono text-[11px] text-zinc-400">
+                  Cognitive Labs · Ingest notes anytime for custom decks
+                </span>
+              )}
 
-              <div className="flex items-center gap-2 font-mono text-[11px]">
+              <div className="flex flex-wrap items-center gap-2 font-mono text-[11px]">
                 <button
                   type="button"
                   onClick={() => navigateTo("royale")}
-                  className={`px-2.5 py-1 rounded-lg border cursor-pointer transition-colors ${
+                  className={`px-2.5 py-1 rounded-lg border cursor-pointer transition-colors whitespace-nowrap ${
                     route === "royale"
                       ? "bg-purple-500/20 border-purple-400 text-purple-200"
                       : "bg-zinc-950 border-white/10 text-zinc-400 hover:text-white"
@@ -299,7 +305,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => navigateTo("socratic")}
-                  className={`px-2.5 py-1 rounded-lg border cursor-pointer transition-colors ${
+                  className={`px-2.5 py-1 rounded-lg border cursor-pointer transition-colors whitespace-nowrap ${
                     route === "socratic"
                       ? "bg-purple-500/20 border-purple-400 text-purple-200"
                       : "bg-zinc-950 border-white/10 text-zinc-400 hover:text-white"
@@ -310,7 +316,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => navigateTo("map")}
-                  className={`px-2.5 py-1 rounded-lg border cursor-pointer transition-colors ${
+                  className={`px-2.5 py-1 rounded-lg border cursor-pointer transition-colors whitespace-nowrap ${
                     route === "map"
                       ? "bg-emerald-500/20 border-emerald-400 text-emerald-200"
                       : "bg-zinc-950 border-white/10 text-zinc-400 hover:text-white"
@@ -326,7 +332,7 @@ export default function App() {
                       setDeckHubOpen(true);
                       setRoute("builder");
                     }}
-                    className="px-2.5 py-1 rounded-lg bg-zinc-950 border border-white/10 text-zinc-300 hover:text-white cursor-pointer"
+                    className="px-2.5 py-1 rounded-lg bg-zinc-950 border border-white/10 text-zinc-300 hover:text-white cursor-pointer whitespace-nowrap"
                   >
                     Study Hub &amp; PDF
                   </button>
@@ -494,6 +500,14 @@ export default function App() {
                             correctIndex: q.correctIndex,
                             explanation: q.explanation,
                             unitTag: q.unitTag,
+                            ...(typeof q.timeSeconds === "number"
+                              ? { timeSeconds: q.timeSeconds }
+                              : {}),
+                            ...(q.timeReason ? { timeReason: q.timeReason } : {}),
+                            ...(q.memoryHook ? { memoryHook: q.memoryHook } : {}),
+                            ...(q.learningMethod
+                              ? { learningMethod: q.learningMethod }
+                              : {}),
                           })
                         )
                       : undefined
