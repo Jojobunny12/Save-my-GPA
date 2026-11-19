@@ -801,6 +801,106 @@ export async function hostLaunchRoyaleMatch(params: {
   }
 }
 
+export async function hostRequeueRoyaleRoom(params: {
+  db: Firestore;
+  room: StudyRoomDocument;
+  players: StudyPlayerDocument[];
+  immediateLaunch?: boolean;
+  fillWithBots?: boolean;
+}): Promise<number> {
+  const {
+    db,
+    room,
+    players,
+    immediateLaunch = false,
+    fillWithBots = true,
+  } = params;
+
+  const newSeed = Math.floor(Math.random() * 900000) + 1000;
+  const layout = generateArenaLayout(newSeed);
+  const miniBozzes = generateMiniBozzes(layout.obstacles);
+  const bots =
+    immediateLaunch && fillWithBots
+      ? generateBackfillBots({
+          existingHumanCount: players.length,
+          targetPlayers: room.targetPlayers || TARGET_LOBBY_SIZE,
+          arenaSeed: newSeed,
+          obstacles: layout.obstacles,
+          riverPoints: layout.riverPoints,
+          bridges: layout.bridges,
+        })
+      : [];
+
+  const batch = writeBatch(db);
+  const targetCount = Math.max(2, players.length);
+
+  players.forEach((p, idx) => {
+    const spawn = getSafeSpawnPosition(
+      idx,
+      targetCount,
+      layout.obstacles,
+      newSeed,
+      layout.riverPoints,
+      layout.bridges
+    );
+    batch.update(doc(db, "studyRooms", room.roomCode, "players", p.playerId), {
+      alive: true,
+      hp: 100,
+      shield: 0,
+      ammo: 0,
+      kills: 0,
+      hasMedallion: false,
+      questionsCorrect: 0,
+      questionsAttempted: 0,
+      x: Math.round(spawn.x),
+      y: Math.round(spawn.y),
+      aimAngle: 0,
+      exposedUntilMs: 0,
+      placement: 0,
+      lastShotId: "",
+      lastShotX: 0,
+      lastShotY: 0,
+      lastShotVx: 0,
+      lastShotVy: 0,
+      lastShotAtMs: 0,
+      updatedAt: serverTimestamp(),
+    });
+  });
+
+  batch.set(doc(db, "studyRooms", room.roomCode, "world", "state"), {
+    bots,
+    miniBozzes,
+    firewalls: [],
+    crateStates: [],
+    killFeed: immediateLaunch
+      ? [
+          fillWithBots
+            ? `Requeue live · ${players.length} humans + ${bots.length} bots · ${miniBozzes.length} Mini-Bozzes`
+            : `Friends Requeue live · ${players.length} challengers · ${miniBozzes.length} Mini-Bozzes`,
+        ]
+      : [],
+    updatedAt: serverTimestamp(),
+  } satisfies StudyWorldStateDocument);
+
+  batch.update(doc(db, "studyRooms", room.roomCode), {
+    status: immediateLaunch ? "active" : "lobby",
+    winnerId: "",
+    winnerName: "",
+    arenaSeed: newSeed,
+    matchStartedAtMs: immediateLaunch ? Date.now() : 0,
+    ...(immediateLaunch ? {} : { countdownEndsAtMs: 0 }),
+    updatedAt: serverTimestamp(),
+  });
+
+  try {
+    await batch.commit();
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `studyRooms/${room.roomCode}`);
+  }
+
+  return newSeed;
+}
+
 export async function syncLocalPlayerState(params: {
   db: Firestore;
   roomCode: string;
@@ -866,9 +966,18 @@ export async function publishWorldPatch(params: {
   addFirewall?: FirewallWall;
   crateState?: SyncedCrateState;
   miniBozzDamage?: { id: string; hp: number; shield: number; alive: boolean };
+  botDamage?: { id: string; hp: number; shield: number; alive: boolean; placement?: number };
   killFeedEntry?: string;
 }): Promise<void> {
-  const { db, roomCode, addFirewall, crateState, miniBozzDamage, killFeedEntry } = params;
+  const {
+    db,
+    roomCode,
+    addFirewall,
+    crateState,
+    miniBozzDamage,
+    botDamage,
+    killFeedEntry,
+  } = params;
   const worldRef = doc(db, "studyRooms", roomCode, "world", "state");
   const now = Date.now();
   try {
@@ -896,16 +1005,37 @@ export async function publishWorldPatch(params: {
 
       let nextMiniBozzes = cur.miniBozzes || [];
       if (miniBozzDamage) {
-        nextMiniBozzes = nextMiniBozzes.map((mb) =>
-          mb.id === miniBozzDamage.id
+        nextMiniBozzes = nextMiniBozzes.map((mb) => {
+          if (mb.id !== miniBozzDamage.id) return mb;
+          const curEhp = mb.hp + mb.shield;
+          const incEhp = miniBozzDamage.hp + miniBozzDamage.shield;
+          return incEhp < curEhp || (!miniBozzDamage.alive && mb.alive)
             ? {
                 ...mb,
-                hp: Math.min(mb.hp, miniBozzDamage.hp),
-                shield: Math.min(mb.shield, miniBozzDamage.shield),
+                hp: Math.max(0, miniBozzDamage.hp),
+                shield: Math.max(0, miniBozzDamage.shield),
                 alive: mb.alive && miniBozzDamage.alive,
               }
-            : mb
-        );
+            : mb;
+        });
+      }
+
+      let nextBots = cur.bots || [];
+      if (botDamage) {
+        nextBots = nextBots.map((b) => {
+          if (b.id !== botDamage.id) return b;
+          const curEhp = b.hp + b.shield;
+          const incEhp = botDamage.hp + botDamage.shield;
+          return incEhp < curEhp || (!botDamage.alive && b.alive)
+            ? {
+                ...b,
+                hp: Math.max(0, botDamage.hp),
+                shield: Math.max(0, botDamage.shield),
+                alive: b.alive && botDamage.alive,
+                placement: botDamage.alive ? b.placement : botDamage.placement || b.placement,
+              }
+            : b;
+        });
       }
 
       const nextFeed = killFeedEntry
@@ -913,7 +1043,7 @@ export async function publishWorldPatch(params: {
         : (cur.killFeed || []).slice(0, 10);
 
       tx.set(worldRef, {
-        bots: (cur.bots || []).slice(0, 20),
+        bots: nextBots.slice(0, 20),
         miniBozzes: nextMiniBozzes.slice(0, 4),
         firewalls: nextFirewalls,
         crateStates: nextCrates,

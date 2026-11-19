@@ -171,14 +171,12 @@ service cloud.firestore {
 
       allow update: if isValidRoomCode(roomCode)
         && isValidStudyRoom(incoming(), roomCode)
-        && existing().status != 'finished'
         && incoming().roomCode == existing().roomCode
         && incoming().hostId == existing().hostId
         && incoming().hostName == existing().hostName
         && incoming().title == existing().title
         && incoming().questions == existing().questions
         && incoming().targetPlayers == existing().targetPlayers
-        && incoming().arenaSeed == existing().arenaSeed
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
@@ -186,6 +184,7 @@ service cloud.firestore {
           (
             existing().status == 'lobby'
             && incoming().status == 'lobby'
+            && incoming().arenaSeed == existing().arenaSeed
             && incoming().diff(existing()).affectedKeys().hasOnly(['countdownEndsAtMs', 'updatedAt'])
           )
           ||
@@ -193,6 +192,7 @@ service cloud.firestore {
           (
             existing().status == 'lobby'
             && incoming().status == 'active'
+            && incoming().arenaSeed == existing().arenaSeed
             && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'matchStartedAtMs', 'updatedAt'])
           )
           ||
@@ -200,7 +200,33 @@ service cloud.firestore {
           (
             existing().status == 'active'
             && incoming().status == 'finished'
+            && incoming().arenaSeed == existing().arenaSeed
             && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'winnerId', 'winnerName', 'updatedAt'])
+          )
+          ||
+          // Action: Host requeues finished room back to open lobby (same roomCode)
+          (
+            existing().status == 'finished'
+            && incoming().status == 'lobby'
+            && incoming().winnerId == ''
+            && incoming().winnerName == ''
+            && incoming().matchStartedAtMs == 0
+            && incoming().countdownEndsAtMs == 0
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'winnerId', 'winnerName', 'matchStartedAtMs', 'countdownEndsAtMs', 'arenaSeed', 'updatedAt'
+            ])
+          )
+          ||
+          // Action: Host quick-requeues finished room directly into a new active match (same roomCode)
+          (
+            existing().status == 'finished'
+            && incoming().status == 'active'
+            && incoming().winnerId == ''
+            && incoming().winnerName == ''
+            && incoming().matchStartedAtMs > 0
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'winnerId', 'winnerName', 'matchStartedAtMs', 'arenaSeed', 'updatedAt'
+            ])
           )
         );
 
@@ -237,7 +263,7 @@ service cloud.firestore {
             'updatedAt'
           ])
           && exists(/databases/$(database)/documents/studyRooms/$(roomCode))
-          && get(/databases/$(database)/documents/studyRooms/$(roomCode)).data.status != 'finished';
+          && getAfter(/databases/$(database)/documents/studyRooms/$(roomCode)).data.status != 'finished';
 
         allow delete: if false;
       }
@@ -251,7 +277,7 @@ service cloud.firestore {
           && isValidWorldState(incoming())
           && incoming().updatedAt == request.time
           && exists(/databases/$(database)/documents/studyRooms/$(roomCode))
-          && get(/databases/$(database)/documents/studyRooms/$(roomCode)).data.status != 'finished';
+          && getAfter(/databases/$(database)/documents/studyRooms/$(roomCode)).data.status != 'finished';
 
         allow delete: if false;
       }

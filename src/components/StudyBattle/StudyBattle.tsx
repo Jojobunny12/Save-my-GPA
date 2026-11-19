@@ -41,6 +41,7 @@ import {
   getOrCreateClientToken,
   getOrCreateSessionToken,
   hostLaunchRoyaleMatch,
+  hostRequeueRoyaleRoom,
   joinBattleRoom,
   loadOrCreateBattleProfile,
   parseStudyQuestionsJson,
@@ -404,7 +405,9 @@ function StudyBattleInner({
   const [profile, setProfile] = useState<BattleProfileDocument | null>(null);
   const [matchResult, setMatchResult] = useState<MatchResultSummary | null>(null);
   const [animatedRankBarPct, setAnimatedRankBarPct] = useState<number>(0);
-  const recordedMatchRoomRef = useRef<string | null>(null);
+  const recordedMatchKeyRef = useRef<string | null>(null);
+  const dismissedMatchAtRef = useRef<number | null>(null);
+  const [isRequeueing, setIsRequeueing] = useState(false);
 
   // Host & Join form state + POI drop selection
   const [hostName, setHostName] = useState("ScholarOne");
@@ -532,6 +535,22 @@ function StudyBattleInner({
     return () => unsubscribe();
   }, [activeRoomCode, firebaseConfig]);
 
+  // Automatically clear post-match summary when host requeues the room (same roomCode)
+  useEffect(() => {
+    if (!matchResult || !room) return;
+    const returnedToLobby = room.status === "lobby";
+    const launchedNewMatch =
+      room.status === "active" &&
+      room.matchStartedAtMs > 0 &&
+      room.matchStartedAtMs !== dismissedMatchAtRef.current;
+
+    if (returnedToLobby || launchedNewMatch) {
+      setMatchResult(null);
+      dismissedMatchAtRef.current = null;
+      setErrorMsg(null);
+    }
+  }, [matchResult, room]);
+
   const isHost = Boolean(room && room.hostId === hostId);
 
   const handleSelectDropPoi = async (poiId: PoiId) => {
@@ -587,7 +606,8 @@ function StudyBattleInner({
 
     setIsBusy(true);
     setMatchResult(null);
-    recordedMatchRoomRef.current = null;
+    recordedMatchKeyRef.current = null;
+    dismissedMatchAtRef.current = null;
     try {
       const db = getStudyBattleDb(firebaseConfig);
       const ensuredProfile =
@@ -699,7 +719,8 @@ function StudyBattleInner({
 
     setIsBusy(true);
     setMatchResult(null);
-    recordedMatchRoomRef.current = null;
+    recordedMatchKeyRef.current = null;
+    dismissedMatchAtRef.current = null;
     try {
       const db = getStudyBattleDb(firebaseConfig);
       const ensuredProfile =
@@ -769,10 +790,12 @@ function StudyBattleInner({
       questionsAttempted: number;
       winnerName: string;
     }) => {
-      if (!activeRoomCode || recordedMatchRoomRef.current === activeRoomCode) {
+      const matchKey = `${activeRoomCode || ""}_${room?.matchStartedAtMs || 0}`;
+      if (!activeRoomCode || recordedMatchKeyRef.current === matchKey) {
         return;
       }
-      recordedMatchRoomRef.current = activeRoomCode;
+      recordedMatchKeyRef.current = matchKey;
+      dismissedMatchAtRef.current = room?.matchStartedAtMs || 0;
 
       try {
         const db = getStudyBattleDb(firebaseConfig);
@@ -801,8 +824,48 @@ function StudyBattleInner({
         );
       }
     },
-    [activeRoomCode, firebaseConfig, players, playerId, profileId, hostName, playerName]
+    [
+      activeRoomCode,
+      room?.matchStartedAtMs,
+      firebaseConfig,
+      players,
+      playerId,
+      profileId,
+      hostName,
+      playerName,
+    ]
   );
+
+  const handleRequeue = async (immediateLaunch: boolean) => {
+    if (!room || !isHost) return;
+    setErrorMsg(null);
+    if (immediateLaunch && !fillWithBots && players.length < 2) {
+      setErrorMsg(
+        "Friends-Only instant re-drop needs at least 2 players in the room. Requeue to Lobby or turn AI Bots Backfill on."
+      );
+      return;
+    }
+    setIsRequeueing(true);
+    playBattleSfx(immediateLaunch ? "jumppad" : "crate", muted);
+    try {
+      const db = getStudyBattleDb(firebaseConfig);
+      await hostRequeueRoyaleRoom({
+        db,
+        room,
+        players,
+        immediateLaunch,
+        fillWithBots,
+      });
+      setMatchResult(null);
+      dismissedMatchAtRef.current = null;
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error ? err.message : "Failed to requeue room."
+      );
+    } finally {
+      setIsRequeueing(false);
+    }
+  };
 
   const handleLeaveRoom = () => {
     setActiveRoomCode(null);
@@ -811,6 +874,9 @@ function StudyBattleInner({
     setWorldState(null);
     setMatchResult(null);
     setErrorMsg(null);
+    setIsRequeueing(false);
+    recordedMatchKeyRef.current = null;
+    dismissedMatchAtRef.current = null;
   };
 
   // POST-MATCH "VICTORY BOZZ" SUMMARY SCREEN
@@ -929,19 +995,103 @@ function StudyBattleInner({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-            <span className="text-xs font-mono text-zinc-400">
-              Survive late System Glitch circles, defeat POI Mini-Bozzes, and ace crates to hit Grand Gbozz.
-            </span>
-            <button
-              type="button"
-              onClick={handleLeaveRoom}
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-extrabold text-xs rounded-xl cursor-pointer whitespace-nowrap"
-            >
-              <RotateCcw className="h-4 w-4" />
-              <span>Play Another Match</span>
-            </button>
-          </div>
+          {errorMsg && (
+            <div className="p-3 bg-red-950/40 border border-red-500/40 rounded-xl text-xs text-red-200 flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 text-red-400 shrink-0" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+
+          {room ? (
+            <div className="p-4 bg-zinc-950/90 border border-emerald-400/30 rounded-xl space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
+                <div className="inline-flex items-center gap-2 text-emerald-300 font-bold">
+                  <Users className="h-4 w-4 text-emerald-400" />
+                  <span>
+                    Squad Connected · Room{" "}
+                    <strong className="text-white">{room.roomCode}</strong> ·{" "}
+                    {players.length} {players.length === 1 ? "Player" : "Friends"} (Same Code)
+                  </span>
+                </div>
+                {room.status === "active" &&
+                  room.matchStartedAtMs === dismissedMatchAtRef.current && (
+                    <span className="text-[11px] text-amber-300">
+                      Match still active for surviving squadmates
+                    </span>
+                  )}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                {isHost ? (
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <button
+                      type="button"
+                      disabled={isRequeueing}
+                      onClick={() => void handleRequeue(false)}
+                      className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-400 hover:bg-emerald-300 disabled:opacity-50 text-zinc-950 font-extrabold text-xs rounded-xl cursor-pointer whitespace-nowrap"
+                    >
+                      <RotateCcw className="h-4 w-4" />
+                      <span>
+                        {isRequeueing
+                          ? "Requeueing Squad..."
+                          : `Requeue to Lobby (Code: ${room.roomCode})`}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isRequeueing || (!fillWithBots && players.length < 2)}
+                      onClick={() => void handleRequeue(true)}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 bg-purple-500 hover:bg-purple-400 disabled:opacity-50 text-white font-bold text-xs rounded-xl cursor-pointer whitespace-nowrap"
+                    >
+                      <Play className="h-4 w-4" />
+                      <span>
+                        Instant Re-Drop ({fillWithBots ? "with Bots" : "Friends Only"})
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleLeaveRoom}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-zinc-900 hover:bg-red-950/50 border border-white/10 hover:border-red-500/40 text-xs font-mono text-zinc-400 hover:text-red-300 rounded-xl cursor-pointer whitespace-nowrap"
+                    >
+                      <LogOut className="h-3.5 w-3.5" />
+                      <span>Leave Room</span>
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="text-xs font-mono text-purple-200">
+                      Staying in Room <strong className="text-white">{room.roomCode}</strong> ·
+                      Waiting for <strong className="text-white">{room.hostName}</strong> to requeue — you will load straight into the next round!
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleLeaveRoom}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-zinc-900 hover:bg-red-950/50 border border-white/10 hover:border-red-500/40 text-xs font-mono text-zinc-400 hover:text-red-300 rounded-xl cursor-pointer whitespace-nowrap"
+                    >
+                      <LogOut className="h-3.5 w-3.5" />
+                      <span>Leave Room</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+              <span className="text-xs font-mono text-zinc-400">
+                Survive late System Glitch circles, defeat POI Mini-Bozzes, and ace crates to hit Grand Gbozz.
+              </span>
+              <button
+                type="button"
+                onClick={handleLeaveRoom}
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-extrabold text-xs rounded-xl cursor-pointer whitespace-nowrap"
+              >
+                <RotateCcw className="h-4 w-4" />
+                <span>Play Another Match</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -952,18 +1102,20 @@ function StudyBattleInner({
     if (room.status === "active" || room.status === "finished") {
       const db = getStudyBattleDb(firebaseConfig);
       return (
-        <BattleRoyaleCanvas
-          db={db}
-          room={room}
-          players={players}
-          worldState={worldState}
-          currentPlayerId={playerId}
-          isHost={isHost}
-          muted={muted}
-          onToggleMute={() => setMuted((m) => !m)}
-          onLeaveRoom={handleLeaveRoom}
-          onMatchComplete={handleMatchComplete}
-        />
+        <div key={`${room.roomCode}_${room.matchStartedAtMs}`}>
+          <BattleRoyaleCanvas
+            db={db}
+            room={room}
+            players={players}
+            worldState={worldState}
+            currentPlayerId={playerId}
+            isHost={isHost}
+            muted={muted}
+            onToggleMute={() => setMuted((m) => !m)}
+            onLeaveRoom={handleLeaveRoom}
+            onMatchComplete={handleMatchComplete}
+          />
+        </div>
       );
     }
 

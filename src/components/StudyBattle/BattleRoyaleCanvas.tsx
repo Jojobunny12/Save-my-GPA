@@ -266,6 +266,12 @@ function encodeShotId(
   return `s_${ts}_${rnd}|${ARCH_CODE[archetype]}:${Math.round(damage)}:${rarity[0]}`.slice(0, 48);
 }
 
+function lerpAngle(current: number, target: number, t: number): number {
+  let diff = ((target - current + Math.PI) % (Math.PI * 2)) - Math.PI;
+  if (diff < -Math.PI) diff += Math.PI * 2;
+  return current + diff * t;
+}
+
 function decodeShotId(shotId: string): {
   archetype: WeaponArchetype;
   damage: number;
@@ -357,11 +363,31 @@ export default function BattleRoyaleCanvas({
   const remoteSmoothRef = useRef<
     Map<string, { x: number; y: number; aimAngle: number }>
   >(new Map());
+  const botSmoothRef = useRef<
+    Map<string, { x: number; y: number; aimAngle: number }>
+  >(new Map());
+  const bossSmoothRef = useRef<
+    Map<string, { x: number; y: number; aimAngle: number }>
+  >(new Map());
   const prevRemoteAliveRef = useRef<Map<string, boolean>>(new Map());
   const lastHitRemoteAtRef = useRef<Map<string, number>>(new Map());
+  const recentBotHitAtRef = useRef<Map<string, number>>(new Map());
+  const recentBossHitAtRef = useRef<Map<string, number>>(new Map());
   const creditedHumanKillsRef = useRef<Set<string>>(new Set());
   const recentlyPlacedWallIdsRef = useRef<Map<string, number>>(new Map());
+  const lastEntityShotIdRef = useRef<Map<string, string>>(new Map());
   const syncNowRef = useRef<boolean>(false);
+  const playerSyncInFlightRef = useRef<boolean>(false);
+  const playerSyncPendingRef = useRef<boolean>(false);
+  const spawnSyncedRef = useRef<boolean>(Boolean(meFromRoom));
+  const canvasSizeRef = useRef<{ cw: number; ch: number; dpr: number }>({
+    cw: 960,
+    ch: 640,
+    dpr: 1,
+  });
+  const aliveCountRef = useRef<number>(
+    players.length + (worldState?.bots?.length || 0)
+  );
   const botsRef = useRef<BotState[]>(worldState?.bots || []);
   const miniBozzesRef = useRef<MiniBozzState[]>(
     worldState?.miniBozzes && worldState.miniBozzes.length > 0
@@ -388,6 +414,7 @@ export default function BattleRoyaleCanvas({
   const lastPhaseRef = useRef(1);
   const lastFootstepDistRef = useRef(0);
   const lastShieldRegenTickRef = useRef(0);
+  const lastStormSfxMsRef = useRef(0);
 
   const keysRef = useRef<Set<string>>(new Set());
   const mouseScreenRef = useRef<{ x: number; y: number; down: boolean }>({
@@ -473,6 +500,43 @@ export default function BattleRoyaleCanvas({
   activeQuizRef.current = Boolean(activePrompt);
 
   useEffect(() => {
+    if (!spawnSyncedRef.current && meFromRoom) {
+      spawnSyncedRef.current = true;
+      localRef.current.x = meFromRoom.x;
+      localRef.current.y = meFromRoom.y;
+      cameraRef.current.x = Math.max(
+        0,
+        Math.min(ARENA_SIZE - canvasSizeRef.current.cw, meFromRoom.x - canvasSizeRef.current.cw / 2)
+      );
+      cameraRef.current.y = Math.max(
+        0,
+        Math.min(ARENA_SIZE - canvasSizeRef.current.ch, meFromRoom.y - canvasSizeRef.current.ch / 2)
+      );
+    }
+  }, [meFromRoom]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const syncDims = () => {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const cw = Math.max(320, Math.floor(rect.width));
+      const ch = Math.max(240, Math.floor(rect.height));
+      canvasSizeRef.current = { cw, ch, dpr };
+      if (canvas.width !== cw * dpr || canvas.height !== ch * dpr) {
+        canvas.width = cw * dpr;
+        canvas.height = ch * dpr;
+      }
+    };
+    syncDims();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(syncDims);
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
     remotePlayersRef.current = players;
     const now = Date.now();
     for (const p of players) {
@@ -490,7 +554,7 @@ export default function BattleRoyaleCanvas({
       if (prevAlive === true && !p.alive) {
         const hitAt = lastHitRemoteAtRef.current.get(p.playerId) || 0;
         if (
-          now - hitAt < 3000 &&
+          now - hitAt < 3500 &&
           !creditedHumanKillsRef.current.has(p.playerId)
         ) {
           creditedHumanKillsRef.current.add(p.playerId);
@@ -505,54 +569,61 @@ export default function BattleRoyaleCanvas({
       }
       prevRemoteAliveRef.current.set(p.playerId, p.alive);
 
-      if (
-        p.lastShotId &&
-        now - p.lastShotAtMs < 1800 &&
-        !seenShotIdsRef.current.has(p.lastShotId)
-      ) {
-        seenShotIdsRef.current.add(p.lastShotId);
-        const decoded = decodeShotId(p.lastShotId);
-        const weaponCfg = WEAPON_META[decoded.archetype];
-        if (decoded.archetype === "scatter") {
-          const baseAng = Math.atan2(p.lastShotVy, p.lastShotVx);
-          const spd = Math.hypot(p.lastShotVx, p.lastShotVy) || weaponCfg.speed;
-          for (let i = 0; i < weaponCfg.pellets; i++) {
-            const offset =
-              ((i / Math.max(1, weaponCfg.pellets - 1)) - 0.5) * weaponCfg.spreadRad;
+      const prevShot = lastEntityShotIdRef.current.get(p.playerId);
+      if (p.lastShotId && p.lastShotId !== prevShot) {
+        lastEntityShotIdRef.current.set(p.playerId, p.lastShotId);
+        const isFreshInitial = prevShot !== undefined || Math.abs(now - p.lastShotAtMs) < 2500;
+        if (isFreshInitial && !seenShotIdsRef.current.has(p.lastShotId)) {
+          seenShotIdsRef.current.add(p.lastShotId);
+          const decoded = decodeShotId(p.lastShotId);
+          const weaponCfg = WEAPON_META[decoded.archetype];
+          const estLagSec = Math.max(0, Math.min(0.14, (now - p.lastShotAtMs) / 1000));
+          const lifeTrim = Math.max(0, Math.min(220, now - p.lastShotAtMs));
+          const maxLife = Math.max(350, (weaponCfg.maxLifeMs || 1100) - lifeTrim);
+
+          if (decoded.archetype === "scatter") {
+            const baseAng = Math.atan2(p.lastShotVy, p.lastShotVx);
+            const spd = Math.hypot(p.lastShotVx, p.lastShotVy) || weaponCfg.speed;
+            for (let i = 0; i < weaponCfg.pellets; i++) {
+              const offset =
+                ((i / Math.max(1, weaponCfg.pellets - 1)) - 0.5) * weaponCfg.spreadRad;
+              const vx = Math.cos(baseAng + offset) * spd;
+              const vy = Math.sin(baseAng + offset) * spd;
+              projectilesRef.current.push({
+                id: `${p.lastShotId}_p${i}`,
+                ownerId: p.playerId,
+                ownerName: p.displayName,
+                isBot: false,
+                x: p.lastShotX + vx * estLagSec,
+                y: p.lastShotY + vy * estLagSec,
+                vx,
+                vy,
+                damage: decoded.damage,
+                archetype: "scatter",
+                rarity: decoded.rarity,
+                splashRadius: 0,
+                maxLifeMs: maxLife,
+                createdAtMs: now,
+              });
+            }
+          } else {
             projectilesRef.current.push({
-              id: `${p.lastShotId}_p${i}`,
+              id: p.lastShotId,
               ownerId: p.playerId,
               ownerName: p.displayName,
               isBot: false,
-              x: p.lastShotX,
-              y: p.lastShotY,
-              vx: Math.cos(baseAng + offset) * spd,
-              vy: Math.sin(baseAng + offset) * spd,
+              x: p.lastShotX + p.lastShotVx * estLagSec,
+              y: p.lastShotY + p.lastShotVy * estLagSec,
+              vx: p.lastShotVx,
+              vy: p.lastShotVy,
               damage: decoded.damage,
-              archetype: "scatter",
+              archetype: decoded.archetype,
               rarity: decoded.rarity,
-              splashRadius: 0,
-              maxLifeMs: weaponCfg.maxLifeMs,
-              createdAtMs: p.lastShotAtMs,
+              splashRadius: weaponCfg.splashRadius,
+              maxLifeMs: maxLife,
+              createdAtMs: now,
             });
           }
-        } else {
-          projectilesRef.current.push({
-            id: p.lastShotId,
-            ownerId: p.playerId,
-            ownerName: p.displayName,
-            isBot: false,
-            x: p.lastShotX,
-            y: p.lastShotY,
-            vx: p.lastShotVx,
-            vy: p.lastShotVy,
-            damage: decoded.damage,
-            archetype: decoded.archetype,
-            rarity: decoded.rarity,
-            splashRadius: weaponCfg.splashRadius,
-            maxLifeMs: weaponCfg.maxLifeMs,
-            createdAtMs: p.lastShotAtMs,
-          });
         }
       }
     }
@@ -563,10 +634,59 @@ export default function BattleRoyaleCanvas({
     const now = Date.now();
 
     if (!isHost) {
-      botsRef.current = worldState.bots || [];
+      const incomingBots = worldState.bots || [];
+      botsRef.current = incomingBots.map((inc) => {
+        if (!botSmoothRef.current.has(inc.id)) {
+          botSmoothRef.current.set(inc.id, {
+            x: inc.x,
+            y: inc.y,
+            aimAngle: inc.aimAngle,
+          });
+        }
+        const hitAt = recentBotHitAtRef.current.get(inc.id) || 0;
+        const cur = botsRef.current.find((b) => b.id === inc.id);
+        if (cur && now - hitAt < 1800) {
+          const curEhp = cur.hp + cur.shield;
+          const incEhp = inc.hp + inc.shield;
+          if (curEhp < incEhp || (!cur.alive && inc.alive)) {
+            return {
+              ...inc,
+              hp: cur.hp,
+              shield: cur.shield,
+              alive: cur.alive && inc.alive,
+            };
+          }
+        }
+        return inc;
+      });
+
       if (worldState.miniBozzes && worldState.miniBozzes.length > 0) {
-        miniBozzesRef.current = worldState.miniBozzes;
+        miniBozzesRef.current = worldState.miniBozzes.map((inc) => {
+          if (!bossSmoothRef.current.has(inc.id)) {
+            bossSmoothRef.current.set(inc.id, {
+              x: inc.x,
+              y: inc.y,
+              aimAngle: inc.aimAngle,
+            });
+          }
+          const hitAt = recentBossHitAtRef.current.get(inc.id) || 0;
+          const cur = miniBozzesRef.current.find((m) => m.id === inc.id);
+          if (cur && now - hitAt < 1800) {
+            const curEhp = cur.hp + cur.shield;
+            const incEhp = inc.hp + inc.shield;
+            if (curEhp < incEhp || (!cur.alive && inc.alive)) {
+              return {
+                ...inc,
+                hp: cur.hp,
+                shield: cur.shield,
+                alive: cur.alive && inc.alive,
+              };
+            }
+          }
+          return inc;
+        });
       }
+
       const incomingWalls = (worldState.firewalls || []).filter(
         (fw) => fw.hp > 0 && fw.expiresAtMs > now
       );
@@ -583,7 +703,26 @@ export default function BattleRoyaleCanvas({
     } else {
       if (botsRef.current.length === 0 && (worldState.bots?.length || 0) > 0) {
         botsRef.current = worldState.bots;
+      } else if (worldState.bots && worldState.bots.length > 0) {
+        for (const inc of worldState.bots) {
+          const cur = botsRef.current.find((b) => b.id === inc.id);
+          if (cur) {
+            const curEhp = cur.hp + cur.shield;
+            const incEhp = inc.hp + inc.shield;
+            if (incEhp < curEhp) {
+              cur.hp = inc.hp;
+              cur.shield = inc.shield;
+            }
+            if (!inc.alive && cur.alive) {
+              cur.alive = false;
+              cur.hp = 0;
+              cur.shield = 0;
+              cur.placement = inc.placement || cur.placement;
+            }
+          }
+        }
       }
+
       if (
         miniBozzesRef.current.length === 0 &&
         (worldState.miniBozzes?.length || 0) > 0
@@ -593,9 +732,17 @@ export default function BattleRoyaleCanvas({
         for (const inc of worldState.miniBozzes) {
           const cur = miniBozzesRef.current.find((m) => m.id === inc.id);
           if (cur) {
-            cur.hp = Math.min(cur.hp, inc.hp);
-            cur.shield = Math.min(cur.shield, inc.shield);
-            if (!inc.alive) cur.alive = false;
+            const curEhp = cur.hp + cur.shield;
+            const incEhp = inc.hp + inc.shield;
+            if (incEhp < curEhp) {
+              cur.hp = inc.hp;
+              cur.shield = inc.shield;
+            }
+            if (!inc.alive && cur.alive) {
+              cur.alive = false;
+              cur.hp = 0;
+              cur.shield = 0;
+            }
           }
         }
       }
@@ -623,50 +770,58 @@ export default function BattleRoyaleCanvas({
     if (!isHost) {
       killFeedRef.current = worldState.killFeed || [];
       for (const b of worldState.bots || []) {
-        if (
-          b.lastShotId &&
-          now - b.lastShotAtMs < 1500 &&
-          !seenShotIdsRef.current.has(b.lastShotId)
-        ) {
-          seenShotIdsRef.current.add(b.lastShotId);
-          projectilesRef.current.push({
-            id: b.lastShotId,
-            ownerId: b.id,
-            ownerName: b.name,
-            isBot: true,
-            x: b.lastShotX,
-            y: b.lastShotY,
-            vx: b.lastShotVx,
-            vy: b.lastShotVy,
-            damage: 15,
-            archetype: b.weaponArchetype || "blaster",
-            rarity: b.weaponRarity || "Common",
-            createdAtMs: b.lastShotAtMs,
-          });
+        const prevShot = lastEntityShotIdRef.current.get(b.id);
+        if (b.lastShotId && b.lastShotId !== prevShot) {
+          lastEntityShotIdRef.current.set(b.id, b.lastShotId);
+          const isFresh = prevShot !== undefined || Math.abs(now - b.lastShotAtMs) < 2500;
+          if (isFresh && !seenShotIdsRef.current.has(b.lastShotId)) {
+            seenShotIdsRef.current.add(b.lastShotId);
+            const estLagSec = Math.max(0, Math.min(0.14, (now - b.lastShotAtMs) / 1000));
+            const lifeTrim = Math.max(0, Math.min(200, now - b.lastShotAtMs));
+            projectilesRef.current.push({
+              id: b.lastShotId,
+              ownerId: b.id,
+              ownerName: b.name,
+              isBot: true,
+              x: b.lastShotX + b.lastShotVx * estLagSec,
+              y: b.lastShotY + b.lastShotVy * estLagSec,
+              vx: b.lastShotVx,
+              vy: b.lastShotVy,
+              damage: 15,
+              archetype: b.weaponArchetype || "blaster",
+              rarity: b.weaponRarity || "Common",
+              maxLifeMs: Math.max(400, 1100 - lifeTrim),
+              createdAtMs: now,
+            });
+          }
         }
       }
       for (const mb of worldState.miniBozzes || []) {
-        if (
-          mb.lastShotId &&
-          now - mb.lastShotAtMs < 1500 &&
-          !seenShotIdsRef.current.has(mb.lastShotId)
-        ) {
-          seenShotIdsRef.current.add(mb.lastShotId);
-          projectilesRef.current.push({
-            id: mb.lastShotId,
-            ownerId: mb.id,
-            ownerName: mb.name,
-            isBot: true,
-            isMiniBozz: true,
-            x: mb.lastShotX,
-            y: mb.lastShotY,
-            vx: mb.lastShotVx,
-            vy: mb.lastShotVy,
-            damage: 22,
-            archetype: "cannon",
-            rarity: "Mythic",
-            createdAtMs: mb.lastShotAtMs,
-          });
+        const prevShot = lastEntityShotIdRef.current.get(mb.id);
+        if (mb.lastShotId && mb.lastShotId !== prevShot) {
+          lastEntityShotIdRef.current.set(mb.id, mb.lastShotId);
+          const isFresh = prevShot !== undefined || Math.abs(now - mb.lastShotAtMs) < 2500;
+          if (isFresh && !seenShotIdsRef.current.has(mb.lastShotId)) {
+            seenShotIdsRef.current.add(mb.lastShotId);
+            const estLagSec = Math.max(0, Math.min(0.14, (now - mb.lastShotAtMs) / 1000));
+            const lifeTrim = Math.max(0, Math.min(200, now - mb.lastShotAtMs));
+            projectilesRef.current.push({
+              id: mb.lastShotId,
+              ownerId: mb.id,
+              ownerName: mb.name,
+              isBot: true,
+              isMiniBozz: true,
+              x: mb.lastShotX + mb.lastShotVx * estLagSec,
+              y: mb.lastShotY + mb.lastShotVy * estLagSec,
+              vx: mb.lastShotVx,
+              vy: mb.lastShotVy,
+              damage: 22,
+              archetype: "cannon",
+              rarity: "Mythic",
+              maxLifeMs: Math.max(400, 1100 - lifeTrim),
+              createdAtMs: now,
+            });
+          }
         }
       }
     }
@@ -1052,6 +1207,7 @@ export default function BattleRoyaleCanvas({
               handleMiniBozzDefeated(mb, meFromRoom?.displayName || "You", true);
             }
             if (!isHost) {
+              recentBossHitAtRef.current.set(mb.id, now);
               void publishWorldPatch({
                 db,
                 roomCode: roomRef.current.roomCode,
@@ -1375,7 +1531,7 @@ export default function BattleRoyaleCanvas({
           ? local.placement
           : local.alive
           ? 1
-          : Math.max(2, hud.aliveCount + 1);
+          : Math.max(2, aliveCountRef.current + 1);
       onMatchComplete({
         placement: finalPlacement,
         totalPlayers,
@@ -1390,10 +1546,8 @@ export default function BattleRoyaleCanvas({
   }, [
     room.status,
     room.winnerName,
-    room.targetPlayers,
     players.length,
     worldState?.bots?.length,
-    hud.aliveCount,
     meFromRoom?.displayName,
     onMatchComplete,
   ]);
@@ -1769,9 +1923,13 @@ export default function BattleRoyaleCanvas({
         if (distFromCenter > zone.currentRadius) {
           const stormDmg = zone.damagePerSec * dt;
           local.hp = Math.max(0, local.hp - stormDmg);
-          playBattleSfx("stormTick", mutedRef.current);
+          if (now - lastStormSfxMsRef.current >= 650) {
+            lastStormSfxMsRef.current = now;
+            playBattleSfx("stormTick", mutedRef.current);
+          }
           if (local.hp <= 0) {
             local.alive = false;
+            syncNowRef.current = true;
             const aliveOthers =
               remotePlayersRef.current.filter(
                 (p) => p.alive && p.playerId !== currentPlayerId
@@ -2130,6 +2288,72 @@ export default function BattleRoyaleCanvas({
         }
       }
 
+      // 2.5 Smooth 60 FPS Entity Interpolation for Remote Humans & (for Non-Host) Bots / Mini-Bozzes
+      const smoothFactor = Math.min(1, dt * 15);
+      for (const rp of remotePlayersRef.current) {
+        if (!rp.alive || rp.playerId === currentPlayerId) continue;
+        const sm = remoteSmoothRef.current.get(rp.playerId);
+        if (!sm) {
+          remoteSmoothRef.current.set(rp.playerId, {
+            x: rp.x,
+            y: rp.y,
+            aimAngle: rp.aimAngle,
+          });
+        } else {
+          if (Math.hypot(rp.x - sm.x, rp.y - sm.y) > 280) {
+            sm.x = rp.x;
+            sm.y = rp.y;
+          } else {
+            sm.x += (rp.x - sm.x) * smoothFactor;
+            sm.y += (rp.y - sm.y) * smoothFactor;
+          }
+          sm.aimAngle = lerpAngle(sm.aimAngle, rp.aimAngle, Math.min(1, dt * 18));
+        }
+      }
+
+      if (!isHost) {
+        for (const bot of botsRef.current) {
+          if (!bot.alive) continue;
+          const sm = botSmoothRef.current.get(bot.id);
+          if (!sm) {
+            botSmoothRef.current.set(bot.id, {
+              x: bot.x,
+              y: bot.y,
+              aimAngle: bot.aimAngle,
+            });
+          } else {
+            if (Math.hypot(bot.x - sm.x, bot.y - sm.y) > 280) {
+              sm.x = bot.x;
+              sm.y = bot.y;
+            } else {
+              sm.x += (bot.x - sm.x) * smoothFactor;
+              sm.y += (bot.y - sm.y) * smoothFactor;
+            }
+            sm.aimAngle = lerpAngle(sm.aimAngle, bot.aimAngle, Math.min(1, dt * 16));
+          }
+        }
+        for (const mb of miniBozzesRef.current) {
+          if (!mb.alive) continue;
+          const sm = bossSmoothRef.current.get(mb.id);
+          if (!sm) {
+            bossSmoothRef.current.set(mb.id, {
+              x: mb.x,
+              y: mb.y,
+              aimAngle: mb.aimAngle,
+            });
+          } else {
+            if (Math.hypot(mb.x - sm.x, mb.y - sm.y) > 280) {
+              sm.x = mb.x;
+              sm.y = mb.y;
+            } else {
+              sm.x += (mb.x - sm.x) * smoothFactor;
+              sm.y += (mb.y - sm.y) * smoothFactor;
+            }
+            sm.aimAngle = lerpAngle(sm.aimAngle, mb.aimAngle, Math.min(1, dt * 14));
+          }
+        }
+      }
+
       // 3. Projectile Simulation, Firewall Blocking, & Hits (Players / Bots / Mini-Bozzes)
       const nextProjectiles: Projectile[] = [];
       for (const proj of projectilesRef.current) {
@@ -2149,7 +2373,7 @@ export default function BattleRoyaleCanvas({
           continue;
         }
 
-        // Check Firewall Cover collision (skip owner's own outward shots within 60ms)
+        // Check Firewall Cover collision (skip owner's own outward shots within 90ms)
         const hitWall = pointHitsFirewall(proj.x, proj.y, firewallsRef.current, now);
         if (
           hitWall &&
@@ -2190,18 +2414,24 @@ export default function BattleRoyaleCanvas({
           }
         }
 
-        // Check hit on Mini-Bozzes
+        // Check hit on Mini-Bozzes (host handles host/bots; non-host handles own bullets accurately)
         if (!consumed && !proj.isMiniBozz) {
           for (const mb of miniBozzesRef.current) {
             if (!mb.alive) continue;
-            if (Math.hypot(proj.x - mb.x, proj.y - mb.y) <= MINI_BOZZ_RADIUS + 6) {
+            const mbSm = !isHost ? bossSmoothRef.current.get(mb.id) : null;
+            const mbX = mbSm ? mbSm.x : mb.x;
+            const mbY = mbSm ? mbSm.y : mb.y;
+            if (Math.hypot(proj.x - mbX, proj.y - mbY) <= MINI_BOZZ_RADIUS + 6) {
               consumed = true;
               spawnBurst(proj.x, proj.y, "#FB7185", 10);
-              spawnLabel(mb.x, mb.y, `-${proj.damage}`, "#FBBF24");
+              spawnLabel(mbX, mbY, `-${proj.damage}`, "#FBBF24");
               if (proj.ownerId === currentPlayerId) {
                 playBattleSfx("hit", mutedRef.current);
               }
-              if (isHost || proj.ownerId === currentPlayerId) {
+              const shouldApply = isHost
+                ? proj.isBot || proj.ownerId === currentPlayerId
+                : proj.ownerId === currentPlayerId;
+              if (shouldApply) {
                 const died = applyDamage(mb, proj.damage);
                 if (died) {
                   handleMiniBozzDefeated(
@@ -2210,7 +2440,8 @@ export default function BattleRoyaleCanvas({
                     proj.ownerId === currentPlayerId
                   );
                 }
-                if (!isHost && proj.ownerId === currentPlayerId) {
+                if (!isHost) {
+                  recentBossHitAtRef.current.set(mb.id, now);
                   void publishWorldPatch({
                     db,
                     roomCode: currentRoom.roomCode,
@@ -2231,15 +2462,18 @@ export default function BattleRoyaleCanvas({
           }
         }
 
-        // Check hit on Bots
+        // Check hit on Bots (each human validates their own hits on bots so non-host combat feels instant!)
         if (!consumed) {
           for (const bot of botsRef.current) {
             if (!bot.alive || bot.id === proj.ownerId) continue;
-            if (Math.hypot(proj.x - bot.x, proj.y - bot.y) <= PLAYER_RADIUS + 6) {
+            const bSm = !isHost ? botSmoothRef.current.get(bot.id) : null;
+            const bx = bSm ? bSm.x : bot.x;
+            const by = bSm ? bSm.y : bot.y;
+            if (Math.hypot(proj.x - bx, proj.y - by) <= PLAYER_RADIUS + 6) {
               consumed = true;
               const prevShield = bot.shield;
               spawnBurst(proj.x, proj.y, "#10B981", 8);
-              spawnLabel(bot.x, bot.y, `-${proj.damage}`, "#F59E0B");
+              spawnLabel(bx, by, `-${proj.damage}`, "#F59E0B");
               if (proj.ownerId === currentPlayerId) {
                 playBattleSfx(
                   prevShield > 0 && prevShield <= proj.damage ? "shieldBreak" : "hit",
@@ -2247,7 +2481,11 @@ export default function BattleRoyaleCanvas({
                 );
               }
 
-              if (isHost) {
+              const shouldApply = isHost
+                ? proj.isBot || proj.ownerId === currentPlayerId
+                : proj.ownerId === currentPlayerId;
+
+              if (shouldApply) {
                 const botDied = applyDamage(bot, proj.damage);
                 if (botDied) {
                   const aliveHumans = remotePlayersRef.current.filter((p) =>
@@ -2256,7 +2494,7 @@ export default function BattleRoyaleCanvas({
                   const aliveBots = botsRef.current.filter((b) => b.alive).length;
                   bot.placement = Math.max(1, aliveHumans + aliveBots + 1);
                   pushKillFeed(`${proj.ownerName} eliminated ${bot.name}`);
-                  spawnLootOrb(bot.x, bot.y, {
+                  spawnLootOrb(bx, by, {
                     ammo: 10,
                     shield: 20,
                     hp: 15,
@@ -2266,19 +2504,38 @@ export default function BattleRoyaleCanvas({
                     weaponRarity: bot.weaponRarity,
                   });
                   bot.hasMedallion = false;
-                  spawnBurst(bot.x, bot.y, "#F59E0B", 18);
+                  spawnBurst(bx, by, "#F59E0B", 18);
 
                   if (proj.ownerId === currentPlayerId) {
                     local.kills += 1;
                     local.shield = Math.min(100, local.shield + 20);
                     local.hp = Math.min(100, local.hp + 10);
                     local.tokens = Math.min(12, local.tokens + 1);
+                    syncNowRef.current = true;
                     playBattleSfx("elim", mutedRef.current);
                     spawnLabel(local.x, local.y, `ELIMINATED ${bot.name}! +20 SHD`, "#10B981");
                   } else if (proj.isBot) {
                     const killerBot = botsRef.current.find((b) => b.id === proj.ownerId);
                     if (killerBot) killerBot.kills += 1;
                   }
+                }
+
+                if (!isHost) {
+                  recentBotHitAtRef.current.set(bot.id, now);
+                  void publishWorldPatch({
+                    db,
+                    roomCode: currentRoom.roomCode,
+                    botDamage: {
+                      id: bot.id,
+                      hp: bot.hp,
+                      shield: bot.shield,
+                      alive: bot.alive,
+                      placement: bot.placement,
+                    },
+                    killFeedEntry: botDied
+                      ? `${proj.ownerName} eliminated ${bot.name}`
+                      : undefined,
+                  });
                 }
               }
               break;
@@ -2308,6 +2565,7 @@ export default function BattleRoyaleCanvas({
                 local.shield = Math.min(100, local.shield + 20);
                 local.hp = Math.min(100, local.hp + 10);
                 local.tokens = Math.min(12, local.tokens + 1);
+                syncNowRef.current = true;
                 spawnLootOrb(rpx, rpy, {
                   ammo: 12,
                   shield: 25,
@@ -2367,14 +2625,7 @@ export default function BattleRoyaleCanvas({
       if (canvas) {
         const ctx = canvas.getContext("2d");
         if (ctx) {
-          const rect = canvas.getBoundingClientRect();
-          const dpr = Math.min(window.devicePixelRatio || 1, 2);
-          const cw = Math.max(320, Math.floor(rect.width));
-          const ch = Math.max(240, Math.floor(rect.height));
-          if (canvas.width !== cw * dpr || canvas.height !== ch * dpr) {
-            canvas.width = cw * dpr;
-            canvas.height = ch * dpr;
-          }
+          const { cw, ch, dpr } = canvasSizeRef.current;
           ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
           let focusX = local.x;
@@ -2385,11 +2636,13 @@ export default function BattleRoyaleCanvas({
             );
             const liveBot = botsRef.current.find((b) => b.alive);
             if (liveHuman) {
-              focusX = liveHuman.x;
-              focusY = liveHuman.y;
+              const sm = remoteSmoothRef.current.get(liveHuman.playerId);
+              focusX = sm ? sm.x : liveHuman.x;
+              focusY = sm ? sm.y : liveHuman.y;
             } else if (liveBot) {
-              focusX = liveBot.x;
-              focusY = liveBot.y;
+              const sm = !isHost ? botSmoothRef.current.get(liveBot.id) : null;
+              focusX = sm ? sm.x : liveBot.x;
+              focusY = sm ? sm.y : liveBot.y;
             }
           }
 
@@ -2810,21 +3063,25 @@ export default function BattleRoyaleCanvas({
             ctx.globalAlpha = 1;
           }
 
-          // AI Mini-Bozzes Render
+          // AI Mini-Bozzes Render (smoothed on non-host screens!)
           for (const mb of miniBozzesRef.current) {
             if (!mb.alive) continue;
-            const dLocal = Math.hypot(mb.x - local.x, mb.y - local.y);
+            const mbSm = !isHost ? bossSmoothRef.current.get(mb.id) : null;
+            const mbx = mbSm ? mbSm.x : mb.x;
+            const mby = mbSm ? mbSm.y : mb.y;
+            const mbAim = mbSm ? mbSm.aimAngle : mb.aimAngle;
+            const dLocal = Math.hypot(mbx - local.x, mby - local.y);
 
             // Boss aura
             ctx.strokeStyle = "rgba(251, 113, 133, 0.55)";
             ctx.lineWidth = 2.5;
             ctx.beginPath();
-            ctx.arc(mb.x, mb.y, MINI_BOZZ_RADIUS + 10 + pulse * 4, 0, Math.PI * 2);
+            ctx.arc(mbx, mby, MINI_BOZZ_RADIUS + 10 + pulse * 4, 0, Math.PI * 2);
             ctx.stroke();
 
             ctx.save();
-            ctx.translate(mb.x, mb.y);
-            ctx.rotate(mb.aimAngle);
+            ctx.translate(mbx, mby);
+            ctx.rotate(mbAim);
             ctx.fillStyle = "#FB7185";
             ctx.fillRect(14, -6, 26, 12);
             ctx.fillStyle = "#F43F5E";
@@ -2839,21 +3096,21 @@ export default function BattleRoyaleCanvas({
             ctx.font = "bold 11px JetBrains Mono, monospace";
             ctx.textAlign = "center";
             ctx.fillStyle = "#FBBF24";
-            ctx.fillText(`MINI-BOZZ · ${mb.name}`, mb.x, mb.y - 44);
+            ctx.fillText(`MINI-BOZZ · ${mb.name}`, mbx, mby - 44);
 
             // Boss Shield & HP Bar
             const bw = 64;
             ctx.fillStyle = "rgba(0,0,0,0.75)";
-            ctx.fillRect(mb.x - bw / 2, mb.y - 38, bw, 9);
+            ctx.fillRect(mbx - bw / 2, mby - 38, bw, 9);
             ctx.fillStyle = "#F43F5E";
-            ctx.fillRect(mb.x - bw / 2, mb.y - 38, bw * (mb.hp / mb.maxHp), 5);
+            ctx.fillRect(mbx - bw / 2, mby - 38, bw * (mb.hp / mb.maxHp), 5);
             ctx.fillStyle = "#38BDF8";
-            ctx.fillRect(mb.x - bw / 2, mb.y - 33, bw * (mb.shield / mb.maxShield), 4);
+            ctx.fillRect(mbx - bw / 2, mby - 33, bw * (mb.shield / mb.maxShield), 4);
 
             if (local.alive && dLocal <= 145) {
               ctx.fillStyle = "#FBBF24";
               ctx.font = "bold 11px JetBrains Mono, monospace";
-              ctx.fillText("[R] RAPID-FIRE BONUS DUEL", mb.x, mb.y + 44);
+              ctx.fillText("[R] RAPID-FIRE BONUS DUEL", mbx, mby + 44);
             }
           }
 
@@ -2989,10 +3246,11 @@ export default function BattleRoyaleCanvas({
 
           for (const bot of botsRef.current) {
             if (!bot.alive) continue;
+            const bSm = !isHost ? botSmoothRef.current.get(bot.id) : null;
             drawContestant({
-              x: bot.x,
-              y: bot.y,
-              aimAngle: bot.aimAngle,
+              x: bSm ? bSm.x : bot.x,
+              y: bSm ? bSm.y : bot.y,
+              aimAngle: bSm ? bSm.aimAngle : bot.aimAngle,
               name: bot.name,
               hp: bot.hp,
               shield: bot.shield,
@@ -3010,29 +3268,24 @@ export default function BattleRoyaleCanvas({
 
           for (const rp of remotePlayersRef.current) {
             if (!rp.alive || rp.playerId === currentPlayerId) continue;
-            const sm = remoteSmoothRef.current.get(rp.playerId) || {
-              x: rp.x,
-              y: rp.y,
-              aimAngle: rp.aimAngle,
-            };
-            sm.x += (rp.x - sm.x) * Math.min(1, dt * 15);
-            sm.y += (rp.y - sm.y) * Math.min(1, dt * 15);
-            sm.aimAngle = rp.aimAngle;
-            remoteSmoothRef.current.set(rp.playerId, sm);
+            const sm = remoteSmoothRef.current.get(rp.playerId);
+            const rx = sm ? sm.x : rp.x;
+            const ry = sm ? sm.y : rp.y;
+            const rAim = sm ? sm.aimAngle : rp.aimAngle;
 
             // Distinct Cyan Challenger Ring so friends/rivals stand out cleanly
             ctx.strokeStyle = "rgba(56, 189, 248, 0.72)";
             ctx.lineWidth = 2;
             ctx.setLineDash([4, 4]);
             ctx.beginPath();
-            ctx.arc(sm.x, sm.y, PLAYER_RADIUS + 8, 0, Math.PI * 2);
+            ctx.arc(rx, ry, PLAYER_RADIUS + 8, 0, Math.PI * 2);
             ctx.stroke();
             ctx.setLineDash([]);
 
             drawContestant({
-              x: sm.x,
-              y: sm.y,
-              aimAngle: sm.aimAngle,
+              x: rx,
+              y: ry,
+              aimAngle: rAim,
               name: rp.displayName,
               hp: rp.hp,
               shield: rp.shield,
@@ -3278,12 +3531,14 @@ export default function BattleRoyaleCanvas({
         }
         for (const rp of remotePlayersRef.current) {
           if (rp.alive && rp.playerId !== currentPlayerId && rp.hasMedallion) {
-            drawMedallionRing(rp.x, rp.y);
+            const sm = remoteSmoothRef.current.get(rp.playerId);
+            drawMedallionRing(sm ? sm.x : rp.x, sm ? sm.y : rp.y);
           }
         }
         for (const b of botsRef.current) {
           if (b.alive && b.hasMedallion) {
-            drawMedallionRing(b.x, b.y);
+            const sm = !isHost ? botSmoothRef.current.get(b.id) : null;
+            drawMedallionRing(sm ? sm.x : b.x, sm ? sm.y : b.y);
           }
         }
 
@@ -3307,7 +3562,10 @@ export default function BattleRoyaleCanvas({
         };
 
         for (const b of botsRef.current) {
-          if (b.alive) revealEnemy(b.x, b.y, b.exposedUntilMs > now);
+          if (b.alive) {
+            const sm = !isHost ? botSmoothRef.current.get(b.id) : null;
+            revealEnemy(sm ? sm.x : b.x, sm ? sm.y : b.y, b.exposedUntilMs > now);
+          }
         }
         // Always show live human challengers on minimap & full map so friends can find & battle each other
         for (const rp of remotePlayersRef.current) {
@@ -3362,6 +3620,7 @@ export default function BattleRoyaleCanvas({
         ).length;
         const aliveBots = botsRef.current.filter((b) => b.alive).length;
         const aliveCount = aliveHumans + aliveBots;
+        aliveCountRef.current = aliveCount;
         const totalCount = remotePlayersRef.current.length + botsRef.current.length;
 
         let nearestCrate: { crate: ArenaCrate; lockedSec: number } | null = null;
@@ -3474,47 +3733,70 @@ export default function BattleRoyaleCanvas({
         }
       }
 
-      // 8. Responsive Firestore Sync for Human Player (~110ms + instant on shot/hit/death) & Host World (~450ms)
-      if (
+      // 8. Serialized High-Frequency Firestore Sync for Human Player (~100ms + instant on shot/hit/death) & Host World (~240ms)
+      const shouldFlushPlayer =
         currentRoom.status === "active" &&
         !matchFinishTriggeredRef.current &&
-        (syncNowRef.current || now - lastPlayerSyncMs >= 110)
-      ) {
-        syncNowRef.current = false;
-        lastPlayerSyncMs = now;
-        void syncLocalPlayerState({
-          db,
-          roomCode: currentRoom.roomCode,
-          playerId: currentPlayerId,
-          state: {
-            alive: local.alive,
-            hp: local.hp,
-            shield: local.shield,
-            ammo: local.ammo,
-            kills: local.kills,
-            hasMedallion: local.hasMedallion,
-            questionsCorrect: local.questionsCorrect,
-            questionsAttempted: local.questionsAttempted,
-            x: local.x,
-            y: local.y,
-            aimAngle: local.aimAngle,
-            exposedUntilMs: local.exposedUntilMs,
-            placement: local.placement,
-            lastShotId: local.lastShotId,
-            lastShotX: local.lastShotX,
-            lastShotY: local.lastShotY,
-            lastShotVx: local.lastShotVx,
-            lastShotVy: local.lastShotVy,
-            lastShotAtMs: local.lastShotAtMs,
-          },
-        }).catch(() => {});
+        (syncNowRef.current || now - lastPlayerSyncMs >= 100);
+
+      if (shouldFlushPlayer) {
+        if (playerSyncInFlightRef.current) {
+          playerSyncPendingRef.current = true;
+        } else {
+          syncNowRef.current = false;
+          playerSyncPendingRef.current = false;
+          playerSyncInFlightRef.current = true;
+          lastPlayerSyncMs = now;
+          const flushLocalState = () => {
+            const cur = localRef.current;
+            void syncLocalPlayerState({
+              db,
+              roomCode: currentRoom.roomCode,
+              playerId: currentPlayerId,
+              state: {
+                alive: cur.alive,
+                hp: cur.hp,
+                shield: cur.shield,
+                ammo: cur.ammo,
+                kills: cur.kills,
+                hasMedallion: cur.hasMedallion,
+                questionsCorrect: cur.questionsCorrect,
+                questionsAttempted: cur.questionsAttempted,
+                x: cur.x,
+                y: cur.y,
+                aimAngle: cur.aimAngle,
+                exposedUntilMs: cur.exposedUntilMs,
+                placement: cur.placement,
+                lastShotId: cur.lastShotId,
+                lastShotX: cur.lastShotX,
+                lastShotY: cur.lastShotY,
+                lastShotVx: cur.lastShotVx,
+                lastShotVy: cur.lastShotVy,
+                lastShotAtMs: cur.lastShotAtMs,
+              },
+            })
+              .catch(() => {})
+              .finally(() => {
+                playerSyncInFlightRef.current = false;
+                if (
+                  playerSyncPendingRef.current &&
+                  roomRef.current.status === "active" &&
+                  !matchFinishTriggeredRef.current
+                ) {
+                  playerSyncPendingRef.current = false;
+                  syncNowRef.current = true;
+                }
+              });
+          };
+          flushLocalState();
+        }
       }
 
       if (
         isHost &&
         currentRoom.status === "active" &&
         !matchFinishTriggeredRef.current &&
-        now - lastWorldSyncMs >= 450
+        now - lastWorldSyncMs >= 240
       ) {
         lastWorldSyncMs = now;
         const activeCrates = Array.from<SyncedCrateState>(
@@ -4068,7 +4350,7 @@ export default function BattleRoyaleCanvas({
                 }
                 className="px-4 py-2 bg-purple-500 hover:bg-purple-400 text-white font-bold text-xs rounded-xl cursor-pointer whitespace-nowrap"
               >
-                Claim Gbozz MMR &amp; Leave
+                Claim MMR &amp; Squad Summary
               </button>
             </div>
           </div>
